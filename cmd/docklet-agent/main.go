@@ -14,11 +14,13 @@ import (
 	"github.com/astracat/docklet/pkg/docker"
 )
 
-const (
-	ControlPlaneURL = "http://localhost:8080"
-)
+var ControlPlaneURL = "http://localhost:8080"
 
 func main() {
+	if cp := os.Getenv("DOCKLET_CP"); cp != "" {
+		ControlPlaneURL = cp
+	}
+
 	hostname, _ := os.Hostname()
 	log.Printf("Starting Docklet Agent on %s...", hostname)
 

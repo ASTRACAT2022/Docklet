@@ -167,12 +167,30 @@ func (s *Server) deployHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	appID := uuid.New().String()
+
+	// Create Initial Revision
+	revID := uuid.New().String()
+	rev := &api.Revision{
+		ID:        revID,
+		AppID:     appID,
+		Image:     req.Image,
+		Status:    "stable",
+		IsStable:  true,
+		CreatedAt: time.Now(),
+	}
+	if err := s.store.CreateRevision(rev); err != nil {
+		log.Printf("Failed to create initial revision: %v", err)
+		http.Error(w, "Internal server error", http.StatusInternalServerError)
+		return
+	}
+
 	app := &api.App{
-		ID:              appID,
-		CurrentRevision: "v1",
-		Status:          "deploying",
-		CreatedAt:       time.Now(),
-		UpdatedAt:       time.Now(),
+		ID:               appID,
+		CurrentRevision:  "v1",
+		ActiveRevisionID: revID,
+		Status:           "deploying",
+		CreatedAt:        time.Now(),
+		UpdatedAt:        time.Now(),
 	}
 
 	if err := s.store.CreateApp(app); err != nil {

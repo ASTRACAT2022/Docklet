@@ -62,6 +62,14 @@ func (s *Store) CreateTask(task *api.Task) error {
 	return s.db.Create(task).Error
 }
 
+func (s *Store) GetTasksByApp(appID string) ([]api.Task, error) {
+	var tasks []api.Task
+	if err := s.db.Where("target_id = ?", appID).Order("created_at desc").Find(&tasks).Error; err != nil {
+		return nil, err
+	}
+	return tasks, nil
+}
+
 func (s *Store) GetPendingTasks(nodeID string) ([]api.Task, error) {
 	var tasks []api.Task
 	if err := s.db.Where("node_id = ? AND status = ?", nodeID, "pending").Find(&tasks).Error; err != nil {
@@ -117,6 +125,14 @@ func (s *Store) UpdateAppActiveRevision(appID, revisionID string) error {
 func (s *Store) GetLatestRevision(appID string) (*api.Revision, error) {
 	var rev api.Revision
 	if err := s.db.Where("app_id = ?", appID).Order("created_at desc").First(&rev).Error; err != nil {
+		return nil, err
+	}
+	return &rev, nil
+}
+
+func (s *Store) GetRevision(id string) (*api.Revision, error) {
+	var rev api.Revision
+	if err := s.db.First(&rev, "id = ?", id).Error; err != nil {
 		return nil, err
 	}
 	return &rev, nil
