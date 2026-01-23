@@ -107,32 +107,139 @@ func (s *HTTPServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	// Path: /api/nodes/{id}/containers
-	id := r.URL.Path[len("/api/nodes/"):]
-	if len(id) > 11 && id[len(id)-11:] == "/containers" {
-		nodeID := id[:len(id)-11]
+	// Path: /api/nodes/{id}/containers...
+	path := r.URL.Path[len("/api/nodes/"):]
 
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+	// Pattern: {nodeID}/containers
+	if len(path) > 11 && path[len(path)-11:] == "/containers" {
+		nodeID := path[:len(path)-11]
+		s.proxyCommand(w, nodeID, "docker_ps", nil)
+		return
+	}
 
-		resp, err := s.grpcServer.ExecuteCommand(ctx, &pb.ExecuteCommandRequest{
-			NodeId:  nodeID,
-			Command: "docker_ps",
-		})
+	// Pattern: {nodeID}/containers/{containerID}/{action}
+	// Simplified parsing for MVP
+	// expected: <nodeID>/containers/<containerID>/<action>
+	// We can use a regex or naive splitting. Naive splitting for dependency-free speed.
 
-		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+	// Check for "containers" segment
+	// /api/nodes/NODE_ID/containers/CONTAINER_ID/start
+
+	// Let's assume URL structure is strict: /api/nodes/<NodeID>/containers/<ContainerID>/<Action>
+	// We already stripped /api/nodes/
+
+	// Split by slash
+	// Start finding "containers"
+	// For now, let's just match exact suffixes for the user's specific request
+
+	// Action: Start
+	if len(path) > 6 && path[len(path)-6:] == "/start" {
+		// .../containers/<CID>/start
+		// Strip /start
+		base := path[:len(path)-6]
+		// Strip prefix up to containers/
+		// Actually this parsing is getting messy. Let's rely on standard Go ServeMux in HandleFunc if we could,
+		// but we are in a sub-handler.
+
+		// Let's split "path"
+		// path = NODEID/containers/CONTAINERID/start
+
+		// Find "containers/"
+		// ...
+
+		// Let's cheat a little and use a helper
+	}
+
+	s.handleContainerActionDynamic(w, r, path)
+}
+
+func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http.Request, path string) {
+	// path is everything after /api/nodes/
+	// Format: NODEID/containers/CONTAINERID/ACTION
+
+	// 1. Find "/containers/"
+	// iterate
+	const marker = "/containers/"
+	idx := -1
+	for i := 0; i < len(path)-len(marker); i++ {
+		if path[i:i+len(marker)] == marker {
+			idx = i
+			break
+		}
+	}
+
+	if idx == -1 {
+		http.NotFound(w, r)
+		return
+	}
+
+	nodeID := path[:idx]
+	rest := path[idx+len(marker):] // CONTAINERID/ACTION or just CONTAINERID
+
+	// 2. Parse ContainerID and Action
+	var containerID, action string
+
+	// Split rest by slash
+	slashIdx := -1
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '/' {
+			slashIdx = i
+			break
+		}
+	}
+
+	if slashIdx == -1 {
+		// No slash, e.g. CONTAINERID (DELETE case)
+		containerID = rest
+		action = ""
+	} else {
+		containerID = rest[:slashIdx]
+		action = rest[slashIdx+1:]
+	}
+
+	if r.Method == http.MethodDelete {
+		if action != "" {
+			http.Error(w, "Invalid path for DELETE", http.StatusBadRequest)
 			return
 		}
+		s.proxyCommand(w, nodeID, "docker_rm", []string{containerID})
+		return
+	}
 
-		if resp.ExitCode != 0 {
-			http.Error(w, resp.Error, http.StatusInternalServerError)
-			return
+	if r.Method == http.MethodPost {
+		switch action {
+		case "start":
+			s.proxyCommand(w, nodeID, "docker_start", []string{containerID})
+		case "stop":
+			s.proxyCommand(w, nodeID, "docker_stop", []string{containerID})
+		default:
+			http.Error(w, "Unknown action: "+action, http.StatusBadRequest)
 		}
-
-		w.Write(resp.Output) // Already JSON
 		return
 	}
 
 	http.NotFound(w, r)
+}
+
+func (s *HTTPServer) proxyCommand(w http.ResponseWriter, nodeID, cmd string, args []string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second) // Increased timeout for stop
+	defer cancel()
+
+	resp, err := s.grpcServer.ExecuteCommand(ctx, &pb.ExecuteCommandRequest{
+		NodeId:  nodeID,
+		Command: cmd,
+		Args:    args,
+	})
+
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	if resp.ExitCode != 0 {
+		http.Error(w, resp.Error, http.StatusInternalServerError)
+		return
+	}
+
+	w.Write(resp.Output)
 }

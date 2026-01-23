@@ -197,12 +197,75 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 						if err := a.DockerCli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
 							errStr = "start error: " + err.Error()
 							exitCode = 1
+							// ... docker_run implementation ...
 						} else {
 							// Success
 							output = []byte(resp.ID)
 							exitCode = 0
 						}
 					}
+				}
+			}
+		}
+
+	case "docker_start":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else {
+			if len(cmd.Args) < 1 {
+				errStr = "container id required"
+				exitCode = 1
+			} else {
+				containerID := cmd.Args[0]
+				if err := a.DockerCli.ContainerStart(context.Background(), containerID, container.StartOptions{}); err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					output = []byte("started")
+					exitCode = 0
+				}
+			}
+		}
+
+	case "docker_stop":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else {
+			if len(cmd.Args) < 1 {
+				errStr = "container id required"
+				exitCode = 1
+			} else {
+				containerID := cmd.Args[0]
+				// Use Default timeout (nil = 10s usually)
+				if err := a.DockerCli.ContainerStop(context.Background(), containerID, container.StopOptions{}); err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					output = []byte("stopped")
+					exitCode = 0
+				}
+			}
+		}
+
+	case "docker_rm":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else {
+			if len(cmd.Args) < 1 {
+				errStr = "container id required"
+				exitCode = 1
+			} else {
+				containerID := cmd.Args[0]
+				// Force remove to ensuring it goes away (like docker rm -f)
+				if err := a.DockerCli.ContainerRemove(context.Background(), containerID, container.RemoveOptions{Force: true}); err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					output = []byte("removed")
+					exitCode = 0
 				}
 			}
 		}
