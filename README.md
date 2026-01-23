@@ -121,6 +121,15 @@ The Agent runs on the machine where you want to run containers.
 ./bin/agent --hub remote-hub-ip:50051
 ```
 
+**Option B: Magic Remote Install (Use from Admin Machine)**
+If you are on your laptop (Mac/Linux) and want to deploy to a remote server without logging in manually:
+
+```bash
+chmod +x scripts/remote_install.sh
+./scripts/remote_install.sh
+```
+*Follow the prompts. It will SSH into the server, upload keys, and start the agent.*
+
 ### 5. Using the CLI
 
 Manage your fleet using the CLI tool.
