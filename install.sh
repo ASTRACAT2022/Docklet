@@ -15,7 +15,7 @@ if [ "$1" != "-install" ] || [ "$2" != "node" ]; then
     exit 1
 fi
 
-echo -e "${CYAN}🚀 Docklet Auto-Installer${NC}"
+echo -e "${CYAN}🚀 Docklet Auto-Installer v1.2${NC}"
 
 # 1. Install Dependencies
 echo -e "${GREEN}Step 1: Installing dependencies (Go, git, make)...${NC}"
@@ -33,16 +33,22 @@ fi
 
 if [ "$(uname)" = "Linux" ]; then
     if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update && $SUDO apt-get install -y git make curl jq wget tar
+        $SUDO apt-get update && $SUDO apt-get install -y git make curl jq tar
     elif command -v yum &> /dev/null; then
-        $SUDO yum install -y git make curl jq wget tar
+        $SUDO yum install -y git make curl jq tar
     fi
     
     # Install Go if missing
     if ! command -v go &> /dev/null; then
         if [ ! -f "/usr/local/go/bin/go" ]; then
             echo "Installing Go..."
-            wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+            # Try curl if wget is missing
+            if command -v wget &> /dev/null; then
+                wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+            else
+                curl -L -o go1.22.0.linux-amd64.tar.gz https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+            fi
+            
             $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
             rm go1.22.0.linux-amd64.tar.gz
         fi
