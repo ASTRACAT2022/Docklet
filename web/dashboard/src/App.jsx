@@ -51,6 +51,11 @@ function App() {
     const [clusterLoading, setClusterLoading] = useState(false)
     const [clusterError, setClusterError] = useState('')
     const [clusterResults, setClusterResults] = useState([])
+    const [clustersList, setClustersList] = useState([])
+    const [clustersLoading, setClustersLoading] = useState(false)
+    const [clustersError, setClustersError] = useState('')
+    const [clusterRenameId, setClusterRenameId] = useState(null)
+    const [clusterRenameValue, setClusterRenameValue] = useState('')
 
     const handleLogin = (newToken) => {
         localStorage.setItem('docklet_token', newToken)
@@ -79,6 +84,33 @@ function App() {
             setNodes(data.nodes || [])
         } catch (err) {
             console.error("Failed to fetch nodes", err)
+        }
+    }
+
+    const fetchClusters = async () => {
+        if (!token) return
+        setClustersLoading(true)
+        setClustersError('')
+        try {
+            const res = await fetch('/api/clusters', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            if (res.status === 401) {
+                handleLogout()
+                return
+            }
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed to load clusters')
+            }
+            const data = await res.json()
+            setClustersList(data.clusters || [])
+        } catch (e) {
+            console.error('clusters error', e)
+            setClustersError(e.message)
+            setClustersList([])
+        } finally {
+            setClustersLoading(false)
         }
     }
 
@@ -208,11 +240,68 @@ function App() {
             setClusterResults(data.results || [])
             fetchNodes()
             if (selectedNode) fetchContainers(selectedNode.node_id)
+            fetchClusters()
         } catch (e) {
             console.error('cluster error', e)
             setClusterError(e.message)
         } finally {
             setClusterLoading(false)
+        }
+    }
+
+    const startRenameCluster = (cluster) => {
+        setClusterRenameId(cluster.id)
+        setClusterRenameValue(cluster.name || '')
+    }
+
+    const saveRenameCluster = async () => {
+        if (!clusterRenameId) return
+        const newName = clusterRenameValue.trim()
+        if (!newName) return
+        try {
+            const res = await fetch(`/api/clusters/${clusterRenameId}/rename`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ name: newName }),
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed to rename cluster')
+            }
+            setClusterRenameId(null)
+            setClusterRenameValue('')
+            fetchClusters()
+        } catch (e) {
+            console.error('rename cluster error', e)
+            setClusterError(e.message)
+        }
+    }
+
+    const deleteCluster = async (cluster) => {
+        if (!window.confirm(`Delete cluster "${cluster.name || cluster.stack_name}"? This will run stack_down on selected nodes.`)) {
+            return
+        }
+        setClusterError('')
+        try {
+            const res = await fetch(`/api/clusters/${cluster.id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` },
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed to delete cluster')
+            }
+            const data = await res.json()
+            if (!data.deleted) {
+                setClusterError('Cluster delete was partial. Retry after fixing failing nodes.')
+            }
+            fetchClusters()
+        } catch (e) {
+            console.error('delete cluster error', e)
+            setClusterError(e.message)
         }
     }
 
@@ -435,6 +524,8 @@ function App() {
                                     setClusterError('')
                                     setClusterResults([])
                                     setClusterNodeIds([])
+                                    setClustersError('')
+                                    fetchClusters()
                                 }}
                                 disabled={nodes.length === 0}
                                 className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium"
@@ -678,6 +769,83 @@ function App() {
 
                         <div className="p-6 flex-1 overflow-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
                             <div className="bg-zinc-950/30 border border-zinc-800 rounded-lg p-4">
+                                <div className="mb-4">
+                                    <div className="text-xs font-semibold text-zinc-400 mb-2 uppercase tracking-wider">Existing Clusters</div>
+                                    {clustersLoading && <div className="text-zinc-500 text-sm">Loading...</div>}
+                                    {!clustersLoading && clustersError && <div className="text-red-400 text-sm">{clustersError}</div>}
+                                    {!clustersLoading && !clustersError && clustersList.length === 0 && (
+                                        <div className="text-zinc-500 text-sm">No clusters yet</div>
+                                    )}
+                                    {!clustersLoading && !clustersError && clustersList.length > 0 && (
+                                        <div className="space-y-2 max-h-40 overflow-auto pr-1">
+                                            {clustersList.map((c) => (
+                                                <div key={c.id} className="p-3 rounded border border-zinc-800 bg-zinc-900/40">
+                                                    <div className="flex items-start justify-between gap-2">
+                                                        <div className="min-w-0">
+                                                            <div className="text-sm font-semibold text-zinc-200 truncate">
+                                                                {c.name || c.stack_name}
+                                                            </div>
+                                                            <div className="text-[11px] text-zinc-500 truncate">
+                                                                Stack: {c.stack_name}
+                                                            </div>
+                                                        </div>
+                                                        <div className="flex gap-2">
+                                                            <button
+                                                                onClick={() => {
+                                                                    setClusterNodeIds(c.nodes || [])
+                                                                    setClusterName(c.stack_name || '')
+                                                                    setClusterContent(c.content || '')
+                                                                    setClusterResults([])
+                                                                    setClusterError('')
+                                                                }}
+                                                                className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors"
+                                                            >
+                                                                Use
+                                                            </button>
+                                                            <button
+                                                                onClick={() => startRenameCluster(c)}
+                                                                className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors"
+                                                            >
+                                                                Rename
+                                                            </button>
+                                                            <button
+                                                                onClick={() => deleteCluster(c)}
+                                                                className="px-2 py-1 bg-red-900/40 text-red-300 rounded text-xs hover:bg-red-900/60 transition-colors border border-red-900/50"
+                                                            >
+                                                                Delete
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                    {clusterRenameId === c.id && (
+                                                        <div className="mt-3 flex gap-2">
+                                                            <input
+                                                                type="text"
+                                                                className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-purple-500 transition-colors"
+                                                                value={clusterRenameValue}
+                                                                onChange={(e) => setClusterRenameValue(e.target.value)}
+                                                            />
+                                                            <button
+                                                                onClick={saveRenameCluster}
+                                                                className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                                                            >
+                                                                Save
+                                                            </button>
+                                                            <button
+                                                                onClick={() => {
+                                                                    setClusterRenameId(null)
+                                                                    setClusterRenameValue('')
+                                                                }}
+                                                                className="px-3 py-2 bg-zinc-800 text-zinc-300 rounded text-sm hover:bg-zinc-700"
+                                                            >
+                                                                Cancel
+                                                            </button>
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                                 <div className="flex items-center justify-between mb-3">
                                     <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Select Nodes</div>
                                     <div className="flex gap-2">

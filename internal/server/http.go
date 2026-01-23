@@ -6,15 +6,20 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	pb "github.com/astracat/docklet/api/proto/v1"
+	"github.com/google/uuid"
 )
 
 type HTTPServer struct {
 	grpcServer *DockletServer
 	staticPath string
+	clustersMu sync.Mutex
+	clustersDB string
 }
 
 type LoginRequest struct {
@@ -42,9 +47,15 @@ const (
 )
 
 func NewHTTPServer(grpcServer *DockletServer, staticPath string) *HTTPServer {
+	dbPath := "./clusters.json"
+	if _, err := os.Stat("/etc/docklet"); err == nil {
+		dbPath = "/etc/docklet/clusters.json"
+	}
+
 	return &HTTPServer{
 		grpcServer: grpcServer,
 		staticPath: staticPath,
+		clustersDB: dbPath,
 	}
 }
 
@@ -59,6 +70,8 @@ func (s *HTTPServer) Start(addr string) error {
 	mux.HandleFunc("/api/nodes", s.authMiddleware(s.handleListNodes))
 	mux.HandleFunc("/api/nodes/", s.authMiddleware(s.handleNodeAction))
 	mux.HandleFunc("/api/clusters/deploy", s.authMiddleware(s.handleClusterDeploy))
+	mux.HandleFunc("/api/clusters", s.authMiddleware(s.handleClusters))
+	mux.HandleFunc("/api/clusters/", s.authMiddleware(s.handleClusterAction))
 
 	// Static Files
 	if s.staticPath != "" {
@@ -79,6 +92,63 @@ func (s *HTTPServer) Start(addr string) error {
 	return http.ListenAndServe(addr, mux)
 }
 
+type Cluster struct {
+	ID        string   `json:"id"`
+	Name      string   `json:"name"`
+	StackName string   `json:"stack_name"`
+	Content   string   `json:"content"`
+	Nodes     []string `json:"nodes"`
+	CreatedAt int64    `json:"created_at"`
+	UpdatedAt int64    `json:"updated_at"`
+}
+
+func (s *HTTPServer) loadClustersLocked() ([]Cluster, error) {
+	b, err := os.ReadFile(s.clustersDB)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Cluster{}, nil
+		}
+		return nil, err
+	}
+
+	if len(bytesTrimSpace(b)) == 0 {
+		return []Cluster{}, nil
+	}
+
+	var clusters []Cluster
+	if err := json.Unmarshal(b, &clusters); err != nil {
+		return nil, err
+	}
+	return clusters, nil
+}
+
+func (s *HTTPServer) saveClustersLocked(clusters []Cluster) error {
+	dir := filepath.Dir(s.clustersDB)
+	if dir != "." && dir != "" {
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			return err
+		}
+	}
+
+	b, err := json.MarshalIndent(clusters, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(s.clustersDB, b, 0600)
+}
+
+func bytesTrimSpace(b []byte) []byte {
+	i := 0
+	j := len(b)
+	for i < j && (b[i] == ' ' || b[i] == '\n' || b[i] == '\r' || b[i] == '\t') {
+		i++
+	}
+	for j > i && (b[j-1] == ' ' || b[j-1] == '\n' || b[j-1] == '\r' || b[j-1] == '\t') {
+		j--
+	}
+	return b[i:j]
+}
+
 func (s *HTTPServer) handleClusterDeploy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
@@ -86,9 +156,10 @@ func (s *HTTPServer) handleClusterDeploy(w http.ResponseWriter, r *http.Request)
 	}
 
 	type ClusterDeployRequest struct {
-		Name    string   `json:"name"`
+		Name      string   `json:"name"`
 		Content string   `json:"content"`
 		Nodes   []string `json:"nodes"`
+		ID      string   `json:"id"`
 	}
 
 	var req ClusterDeployRequest
@@ -163,6 +234,215 @@ func (s *HTTPServer) handleClusterDeploy(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"results": results,
 	})
+
+	s.clustersMu.Lock()
+	defer s.clustersMu.Unlock()
+
+	clusters, err := s.loadClustersLocked()
+	if err != nil {
+		return
+	}
+
+	clusterID := strings.TrimSpace(req.ID)
+	if clusterID == "" {
+		for _, c := range clusters {
+			if c.StackName == req.Name {
+				clusterID = c.ID
+				break
+			}
+		}
+	}
+	if clusterID == "" {
+		clusterID = uuid.New().String()
+	}
+
+	updated := false
+	for i := range clusters {
+		if clusters[i].ID == clusterID {
+			if clusters[i].Name == "" {
+				clusters[i].Name = req.Name
+			}
+			clusters[i].StackName = req.Name
+			clusters[i].Content = req.Content
+			clusters[i].Nodes = req.Nodes
+			clusters[i].UpdatedAt = now
+			updated = true
+			break
+		}
+	}
+	if !updated {
+		clusters = append(clusters, Cluster{
+			ID:        clusterID,
+			Name:      req.Name,
+			StackName: req.Name,
+			Content:   req.Content,
+			Nodes:     req.Nodes,
+			CreatedAt: now,
+			UpdatedAt: now,
+		})
+	}
+
+	_ = s.saveClustersLocked(clusters)
+}
+
+func (s *HTTPServer) handleClusters(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.clustersMu.Lock()
+	clusters, err := s.loadClustersLocked()
+	s.clustersMu.Unlock()
+	if err != nil {
+		http.Error(w, "Failed to load clusters", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"clusters": clusters,
+	})
+}
+
+func (s *HTTPServer) handleClusterAction(w http.ResponseWriter, r *http.Request) {
+	path := strings.TrimPrefix(r.URL.Path, "/api/clusters/")
+	path = strings.Trim(path, "/")
+	if path == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.Split(path, "/")
+	id := parts[0]
+	action := ""
+	if len(parts) > 1 {
+		action = parts[1]
+	}
+
+	if r.Method == http.MethodPost && action == "rename" {
+		var req RenameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+		newName := strings.TrimSpace(req.Name)
+		if newName == "" {
+			http.Error(w, "Name is required", http.StatusBadRequest)
+			return
+		}
+
+		s.clustersMu.Lock()
+		clusters, err := s.loadClustersLocked()
+		if err == nil {
+			found := false
+			now := time.Now().Unix()
+			for i := range clusters {
+				if clusters[i].ID == id {
+					clusters[i].Name = newName
+					clusters[i].UpdatedAt = now
+					found = true
+					break
+				}
+			}
+			if found {
+				_ = s.saveClustersLocked(clusters)
+			}
+		}
+		s.clustersMu.Unlock()
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"ok": true,
+		})
+		return
+	}
+
+	if r.Method == http.MethodDelete && action == "" {
+		s.clustersMu.Lock()
+		clusters, err := s.loadClustersLocked()
+		if err != nil {
+			s.clustersMu.Unlock()
+			http.Error(w, "Failed to load clusters", http.StatusInternalServerError)
+			return
+		}
+
+		var target *Cluster
+		for i := range clusters {
+			if clusters[i].ID == id {
+				target = &clusters[i]
+				break
+			}
+		}
+		if target == nil {
+			s.clustersMu.Unlock()
+			http.NotFound(w, r)
+			return
+		}
+
+		stackName := target.StackName
+		nodes := append([]string{}, target.Nodes...)
+		s.clustersMu.Unlock()
+
+		type DownResult struct {
+			NodeID   string `json:"node_id"`
+			OK       bool   `json:"ok"`
+			ExitCode int32  `json:"exit_code,omitempty"`
+			Error    string `json:"error,omitempty"`
+		}
+		results := make([]DownResult, 0, len(nodes))
+		allOK := true
+
+		for _, nodeID := range nodes {
+			ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+			resp, err := s.grpcServer.ExecuteCommand(ctx, &pb.ExecuteCommandRequest{
+				NodeId:  nodeID,
+				Command: "stack_down",
+				Args:    []string{stackName},
+			})
+			cancel()
+			if err != nil {
+				allOK = false
+				results = append(results, DownResult{NodeID: nodeID, OK: false, Error: err.Error()})
+				continue
+			}
+			ok := resp.ExitCode == 0
+			if !ok {
+				allOK = false
+			}
+			errMsg := ""
+			if !ok {
+				errMsg = resp.Error
+			}
+			results = append(results, DownResult{NodeID: nodeID, OK: ok, ExitCode: resp.ExitCode, Error: errMsg})
+		}
+
+		deleted := false
+		if allOK {
+			s.clustersMu.Lock()
+			clusters2, err := s.loadClustersLocked()
+			if err == nil {
+				out := make([]Cluster, 0, len(clusters2))
+				for _, c := range clusters2 {
+					if c.ID != id {
+						out = append(out, c)
+					}
+				}
+				_ = s.saveClustersLocked(out)
+				deleted = true
+			}
+			s.clustersMu.Unlock()
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"deleted": deleted,
+			"results": results,
+		})
+		return
+	}
+
+	http.NotFound(w, r)
 }
 
 func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
