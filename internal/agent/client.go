@@ -21,6 +21,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"os/exec"
 )
 
 type Agent struct {
@@ -367,6 +368,74 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 					}
 				}
 			}
+		}
+
+	case "stack_up":
+		if len(cmd.Args) < 2 {
+			errStr = "stack name and content required"
+			exitCode = 1
+		} else {
+			stackName := cmd.Args[0]
+			content := cmd.Args[1]
+			
+			// 1. Write content to file
+			dir := fmt.Sprintf("/tmp/docklet_stacks/%s", stackName)
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				errStr = "failed to create dir: " + err.Error()
+				exitCode = 1
+			} else {
+				filePath := fmt.Sprintf("%s/docker-compose.yml", dir)
+				if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+					errStr = "failed to write file: " + err.Error()
+					exitCode = 1
+				} else {
+					// 2. Run docker compose up -d
+					c := exec.Command("docker", "compose", "-p", stackName, "-f", filePath, "up", "-d")
+					out, err := c.CombinedOutput()
+					if err != nil {
+						errStr = string(out) + "\n" + err.Error()
+						exitCode = 1
+					} else {
+						output = out
+						exitCode = 0
+					}
+				}
+			}
+		}
+
+	case "stack_down":
+		if len(cmd.Args) < 1 {
+			errStr = "stack name required"
+			exitCode = 1
+		} else {
+			stackName := cmd.Args[0]
+			dir := fmt.Sprintf("/tmp/docklet_stacks/%s", stackName)
+			filePath := fmt.Sprintf("%s/docker-compose.yml", dir)
+			
+			c := exec.Command("docker", "compose", "-p", stackName, "down")
+			if _, err := os.Stat(filePath); err == nil {
+				c = exec.Command("docker", "compose", "-p", stackName, "-f", filePath, "down")
+			}
+
+			out, err := c.CombinedOutput()
+			if err != nil {
+				errStr = string(out) + "\n" + err.Error()
+				exitCode = 1
+			} else {
+				output = out
+				exitCode = 0
+			}
+		}
+		
+	case "stack_ls":
+		c := exec.Command("docker", "compose", "ls", "--format", "json")
+		out, err := c.CombinedOutput()
+		if err != nil {
+			errStr = string(out) + "\n" + err.Error()
+			exitCode = 1
+		} else {
+			output = out
+			exitCode = 0
 		}
 
 	case "docker_start":

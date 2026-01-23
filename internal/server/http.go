@@ -148,6 +148,60 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Pattern: {nodeID}/stacks
+	if len(path) > 7 && path[len(path)-7:] == "/stacks" {
+		nodeID := path[:len(path)-7]
+
+		if r.Method == http.MethodGet {
+			s.proxyCommand(w, nodeID, "stack_ls", nil)
+			return
+		}
+		
+		if r.Method == http.MethodPost {
+			// Create/Update stack
+			type StackRequest struct {
+				Name    string `json:"name"`
+				Content string `json:"content"`
+			}
+			var req StackRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			if req.Name == "" || req.Content == "" {
+				http.Error(w, "Name and content required", http.StatusBadRequest)
+				return
+			}
+			s.proxyCommand(w, nodeID, "stack_up", []string{req.Name, req.Content})
+			return
+		}
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Pattern: {nodeID}/stacks/{stackName}
+	// Detect /stacks/
+	const stacksMarker = "/stacks/"
+	stacksIdx := -1
+	for i := 0; i < len(path)-len(stacksMarker); i++ {
+		if path[i:i+len(stacksMarker)] == stacksMarker {
+			stacksIdx = i
+			break
+		}
+	}
+
+	if stacksIdx != -1 {
+		nodeID := path[:stacksIdx]
+		rest := path[stacksIdx+len(stacksMarker):]
+		
+		// rest = stackName or stackName/action?
+		// Assume DELETE for down
+		if r.Method == http.MethodDelete {
+			s.proxyCommand(w, nodeID, "stack_down", []string{rest})
+			return
+		}
+	}
+
 	// Pattern: {nodeID}/containers
 	if len(path) > 11 && path[len(path)-11:] == "/containers" {
 		nodeID := path[:len(path)-11]
