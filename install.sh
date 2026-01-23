@@ -249,17 +249,40 @@ elif [ "$MODE" == "node" ]; then
     echo -e "${GREEN}Building Agent...${NC}"
     go build -o bin/agent ./cmd/agent
 
-    echo -e "${GREEN}Bootstrapping Certs from $HUB_IP...${NC}"
-    RESPONSE=$(curl -s "http://$HUB_IP:1499/api/bootstrap/certs?token=$BOOTSTRAP_TOKEN")
-    
-    mkdir -p certs
-    echo "$RESPONSE" | jq -r .ca_cert > certs/ca-cert.pem
-    echo "$RESPONSE" | jq -r .agent_cert > certs/agent-cert.pem
-    echo "$RESPONSE" | jq -r .agent_key > certs/agent-key.pem
+    # Bootstrapping Certs
+    # In Safe Mode (update), we check if certs exist.
+    if [ -f "certs/agent-key.pem" ]; then
+        echo -e "${CYAN}Agent certificates found. Skipping bootstrap to preserve identity.${NC}"
+        # We assume the HUB_IP didn't change, or if it did, mTLS might break if SANs don't match.
+        # But usually updates are on same infra.
+    else
+        echo -e "${GREEN}Bootstrapping Certs from $HUB_IP...${NC}"
+        # Try HTTPS first (since we enabled SSL), fallback to HTTP?
+        # For now, let's try HTTP port 1499. If we enabled SSL, it might be HTTPS only?
+        # The Go server uses StartTLS if env vars are set. If we set them on Hub, Hub is HTTPS.
+        # So we should try HTTPS first with -k (insecure) because self-signed.
+        
+        PROTO="https"
+        RESPONSE=$(curl -sk "https://$HUB_IP:1499/api/bootstrap/certs?token=$BOOTSTRAP_TOKEN")
+        
+        # Check if response is JSON or error
+        if ! echo "$RESPONSE" | jq -e . >/dev/null 2>&1; then
+             # Fallback to HTTP if HTTPS failed (maybe old hub?)
+             echo "HTTPS failed, trying HTTP..."
+             PROTO="http"
+             RESPONSE=$(curl -s "http://$HUB_IP:1499/api/bootstrap/certs?token=$BOOTSTRAP_TOKEN")
+        fi
+        
+        mkdir -p certs
+        echo "$RESPONSE" | jq -r .ca_cert > certs/ca-cert.pem
+        echo "$RESPONSE" | jq -r .agent_cert > certs/agent-cert.pem
+        echo "$RESPONSE" | jq -r .agent_key > certs/agent-key.pem
 
-    if [ ! -s certs/agent-key.pem ]; then
-        echo -e "${RED}❌ Failed to fetch certs. Check Hub IP and Token.${NC}"
-        exit 1
+        if [ ! -s certs/agent-key.pem ]; then
+            echo -e "${RED}❌ Failed to fetch certs. Check Hub IP ($PROTO) and Token.${NC}"
+            echo "Response: $RESPONSE"
+            exit 1
+        fi
     fi
 
     # Install Systemd Service for Agent
