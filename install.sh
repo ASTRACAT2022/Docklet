@@ -246,6 +246,33 @@ elif [ "$MODE" == "node" ]; then
         exit 1
     fi
 
+    # Install Go 1.25+ (Required for Agent too)
+    NEED_GO=true
+    if command -v go &> /dev/null; then
+        GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
+        if [[ "$GO_VER" =~ ^1\.([1-9]|1[0-9]|2[0-3])(\.|$) ]]; then
+             echo "⚠️  Go version $GO_VER is too old. Installing 1.25..."
+             if command -v apt-get &> /dev/null; then $SUDO apt-get remove -y golang-go golang || true; fi
+             if command -v yum &> /dev/null; then $SUDO yum remove -y golang || true; fi
+             $SUDO rm -rf /usr/local/go
+        else
+             NEED_GO=false
+             echo "Found Go version: $GO_VER"
+        fi
+    fi
+
+    if [ "$NEED_GO" = true ]; then
+        echo "Installing Go 1.25..."
+        if command -v wget &> /dev/null; then
+            wget -q https://go.dev/dl/go1.25.6.linux-amd64.tar.gz
+        else
+            curl -L -o go1.25.6.linux-amd64.tar.gz https://go.dev/dl/go1.25.6.linux-amd64.tar.gz
+        fi
+        $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz
+        rm go1.25.6.linux-amd64.tar.gz
+    fi
+    export PATH=/usr/local/go/bin:$PATH
+
     echo -e "${GREEN}Building Agent...${NC}"
     go build -o bin/agent ./cmd/agent
 
