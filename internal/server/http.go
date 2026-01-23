@@ -39,6 +39,10 @@ type ExecRequest struct {
 	Cmd []string `json:"cmd"`
 }
 
+type RestartPolicyRequest struct {
+	Policy string `json:"policy"`
+}
+
 const (
 	// Default credentials if not set via env
 	defaultUser  = "astracat"
@@ -715,6 +719,18 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 			s.proxyCommand(w, nodeID, "docker_start", []string{containerID})
 		case "stop":
 			s.proxyCommand(w, nodeID, "docker_stop", []string{containerID})
+		case "restart-policy":
+			var req RestartPolicyRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			policy := strings.TrimSpace(req.Policy)
+			if policy == "" {
+				http.Error(w, "policy is required", http.StatusBadRequest)
+				return
+			}
+			s.proxyCommand(w, nodeID, "docker_update_restart", []string{containerID, policy})
 		case "exec":
 			var req ExecRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {

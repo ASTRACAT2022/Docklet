@@ -532,6 +532,31 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 				}
 			}
 		}
+	case "docker_update_restart":
+		if len(cmd.Args) < 2 {
+			errStr = "container id and restart policy required"
+			exitCode = 1
+		} else {
+			containerID := strings.TrimSpace(cmd.Args[0])
+			policy := strings.TrimSpace(cmd.Args[1])
+			if containerID == "" {
+				errStr = "container id required"
+				exitCode = 1
+			} else if policy == "" {
+				errStr = "restart policy required"
+				exitCode = 1
+			} else {
+				c := exec.Command("docker", "update", "--restart", policy, containerID)
+				out, err := c.CombinedOutput()
+				if err != nil {
+					errStr = string(out) + "\n" + err.Error()
+					exitCode = 1
+				} else {
+					output = out
+					exitCode = 0
+				}
+			}
+		}
 	case "node_rename":
 		if len(cmd.Args) < 1 {
 			errStr = "name required"

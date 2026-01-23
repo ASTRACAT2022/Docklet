@@ -165,6 +165,48 @@ function App() {
         } catch (e) { console.error('remove error', e) }
     }
 
+    const enableAutoRestart = async (nodeId, containerId) => {
+        try {
+            const res = await fetch(`/api/nodes/${nodeId}/containers/${containerId}/restart-policy`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ policy: 'unless-stopped' }),
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed')
+            }
+            fetchContainers(nodeId)
+        } catch (e) {
+            console.error('restart policy error', e)
+            alert('Failed to enable auto-restart: ' + (e.message || 'unknown error'))
+        }
+    }
+
+    const disableAutoRestart = async (nodeId, containerId) => {
+        try {
+            const res = await fetch(`/api/nodes/${nodeId}/containers/${containerId}/restart-policy`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ policy: 'no' }),
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed')
+            }
+            fetchContainers(nodeId)
+        } catch (e) {
+            console.error('restart policy error', e)
+            alert('Failed to disable auto-restart: ' + (e.message || 'unknown error'))
+        }
+    }
+
     const deployStack = async () => {
         if (!selectedNode) return
         if (!stackName.trim() || !stackContent.trim()) {
@@ -657,6 +699,8 @@ function App() {
                                                     <button onClick={() => startContainer(selectedNode.node_id, c.Id)} className="mr-3 text-green-500 hover:text-green-400 transition-colors">Start</button>
                                                     <button onClick={() => stopContainer(selectedNode.node_id, c.Id)} className="mr-3 text-yellow-500 hover:text-yellow-400 transition-colors">Stop</button>
                                                     <button onClick={() => removeContainer(selectedNode.node_id, c.Id)} className="mr-3 text-red-500 hover:text-red-400 transition-colors">Delete</button>
+                                                    <button onClick={() => enableAutoRestart(selectedNode.node_id, c.Id)} className="mr-3 text-purple-400 hover:text-purple-300 transition-colors">AutoRestart On</button>
+                                                    <button onClick={() => disableAutoRestart(selectedNode.node_id, c.Id)} className="mr-3 text-zinc-400 hover:text-zinc-200 transition-colors">Off</button>
                                                     <button onClick={() => fetchLogs(selectedNode.node_id, c)} className="mr-3 text-blue-500 hover:text-blue-400 transition-colors">Logs</button>
                                                     <button onClick={() => openDetails(selectedNode.node_id, c)} className="text-zinc-400 hover:text-zinc-200 transition-colors">Details</button>
                                                 </td>
