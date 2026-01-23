@@ -1,6 +1,6 @@
 module github.com/astracat/docklet
 
-go 1.22
+go 1.24.0
 
 require (
 	github.com/docker/docker v27.1.1+incompatible

@@ -15,7 +15,7 @@ if [ "$1" != "-install" ] || [ "$2" != "node" ]; then
     exit 1
 fi
 
-echo -e "${CYAN}🚀 Docklet Auto-Installer v1.5${NC}"
+echo -e "${CYAN}🚀 Docklet Auto-Installer v1.7${NC}"
 
 # 1. Install Dependencies
 echo -e "${GREEN}Step 1: Installing dependencies (Go, git, make)...${NC}"
@@ -38,12 +38,12 @@ if [ "$(uname)" = "Linux" ]; then
         $SUDO yum install -y git make curl jq tar
     fi
     
-    # If a system Go exists, it might be too old (e.g. 1.19). We want 1.22.
+    # If a system Go exists, it might be too old (e.g. 1.19). We want 1.24+.
     if command -v go &> /dev/null; then
         GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
         echo "Found Go version: $GO_VER"
-        if [[ "$GO_VER" == 1.1* ]] || [[ "$GO_VER" == 1.20* ]] || [[ "$GO_VER" == 1.21* ]]; then
-            echo "⚠️  Go version is too old. Removing distro Go and installing 1.22..."
+        if [[ "$GO_VER" == 1.1* ]] || [[ "$GO_VER" == 1.20* ]] || [[ "$GO_VER" == 1.21* ]] || [[ "$GO_VER" == 1.22* ]] || [[ "$GO_VER" == 1.23* ]]; then
+            echo "⚠️  Go version is too old. Removing distro Go and installing 1.25..."
             if command -v apt-get &> /dev/null; then
                 $SUDO apt-get remove -y golang-go golang || true
             elif command -v yum &> /dev/null; then
@@ -56,16 +56,16 @@ if [ "$(uname)" = "Linux" ]; then
     # Install Go if missing
     if ! command -v go &> /dev/null || [ ! -d "/usr/local/go" ]; then
         if [ ! -f "/usr/local/go/bin/go" ]; then
-            echo "Installing Go 1.22..."
+            echo "Installing Go 1.25..."
             # Try curl if wget is missing
             if command -v wget &> /dev/null; then
-                wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+                wget -q https://go.dev/dl/go1.25.6.linux-amd64.tar.gz
             else
-                curl -L -o go1.22.0.linux-amd64.tar.gz https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+                curl -L -o go1.25.6.linux-amd64.tar.gz https://go.dev/dl/go1.25.6.linux-amd64.tar.gz
             fi
             
-            $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
-            rm go1.22.0.linux-amd64.tar.gz
+            $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz
+            rm go1.25.6.linux-amd64.tar.gz
         fi
         export PATH=/usr/local/go/bin:$PATH
     fi
@@ -77,7 +77,7 @@ export PATH=/usr/local/go/bin:$PATH
 # Ensure Go is available
 if ! command -v go &> /dev/null; then
     if ! command -v go &> /dev/null; then
-         echo -e "${RED}❌ Go installation failed. Please install Go 1.22 manually.${NC}"
+         echo -e "${RED}❌ Go installation failed. Please install Go 1.24+ manually.${NC}"
          exit 1
     fi
 fi
