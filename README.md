@@ -116,7 +116,12 @@ The Hub includes a built-in Web Dashboard. Application source code is in `web/da
 
 1.  Make sure you built the project (`make build` compiles the frontend).
 2.  Start the Hub.
-3.  Open **http://localhost:8080** in your browser.
+3.  Open **http://localhost:1499** in your browser.
+
+**Default Credentials:**
+*   Username: `astracat`
+*   Password: `astracat`
+
 
 ---
 

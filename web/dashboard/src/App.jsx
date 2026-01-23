@@ -1,14 +1,36 @@
 import { useState, useEffect } from 'react'
+import Login from './Login'
 
 function App() {
     const [nodes, setNodes] = useState([])
     const [selectedNode, setSelectedNode] = useState(null)
     const [containers, setContainers] = useState([])
     const [loading, setLoading] = useState(false)
+    const [token, setToken] = useState(localStorage.getItem('docklet_token'))
+
+    const handleLogin = (newToken) => {
+        localStorage.setItem('docklet_token', newToken)
+        setToken(newToken)
+    }
+
+    const handleLogout = () => {
+        localStorage.removeItem('docklet_token')
+        setToken(null)
+        setNodes([])
+        setContainers([])
+        setSelectedNode(null)
+    }
 
     const fetchNodes = async () => {
+        if (!token) return
         try {
-            const res = await fetch('/api/nodes')
+            const res = await fetch('/api/nodes', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
+            if (res.status === 401) {
+                handleLogout()
+                return
+            }
             const data = await res.json()
             setNodes(data.nodes || [])
         } catch (err) {
@@ -19,7 +41,9 @@ function App() {
     const fetchContainers = async (nodeId) => {
         setLoading(true)
         try {
-            const res = await fetch(`/api/nodes/${nodeId}/containers`)
+            const res = await fetch(`/api/nodes/${nodeId}/containers`, {
+                headers: { 'Authorization': `Bearer ${token}` }
+            })
             if (!res.ok) throw new Error("Failed")
             const data = await res.json()
             setContainers(data)
@@ -32,10 +56,12 @@ function App() {
     }
 
     useEffect(() => {
-        fetchNodes()
-        const interval = setInterval(fetchNodes, 5000)
-        return () => clearInterval(interval)
-    }, [])
+        if (token) {
+            fetchNodes()
+            const interval = setInterval(fetchNodes, 5000)
+            return () => clearInterval(interval)
+        }
+    }, [token])
 
     useEffect(() => {
         if (selectedNode) {
@@ -43,10 +69,19 @@ function App() {
         }
     }, [selectedNode])
 
+    if (!token) {
+        return <Login onLogin={handleLogin} />
+    }
+
     return (
         <div className="min-h-screen bg-gray-100 p-8">
             <div className="max-w-6xl mx-auto">
-                <h1 className="text-3xl font-bold mb-8 text-gray-800">Docklet Control Center</h1>
+                <div className="flex justify-between items-center mb-8">
+                    <h1 className="text-3xl font-bold text-gray-800">Docklet Control Center</h1>
+                    <button onClick={handleLogout} className="text-sm text-red-600 hover:text-red-800 font-semibold">
+                        Logout
+                    </button>
+                </div>
 
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
                     {/* Nodes List */}

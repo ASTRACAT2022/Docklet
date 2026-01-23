@@ -69,7 +69,7 @@ func main() {
 	// Start HTTP Server
 	go func() {
 		httpSrv := server.NewHTTPServer(hubServer, "./web/dashboard/dist")
-		if err := httpSrv.Start(":8080"); err != nil {
+		if err := httpSrv.Start(":1499"); err != nil {
 			log.Printf("HTTP Server error: %v", err)
 		}
 	}()
