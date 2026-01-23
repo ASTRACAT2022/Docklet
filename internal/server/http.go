@@ -30,6 +30,10 @@ type RenameRequest struct {
 	Name string `json:"name"`
 }
 
+type ExecRequest struct {
+	Cmd []string `json:"cmd"`
+}
+
 const (
 	// Hardcoded for MVP as requested
 	validUser  = "astracat"
@@ -235,6 +239,19 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 			s.proxyCommand(w, nodeID, "docker_start", []string{containerID})
 		case "stop":
 			s.proxyCommand(w, nodeID, "docker_stop", []string{containerID})
+		case "exec":
+			var req ExecRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			if len(req.Cmd) == 0 {
+				http.Error(w, "cmd is required", http.StatusBadRequest)
+				return
+			}
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			args := append([]string{containerID}, req.Cmd...)
+			s.proxyCommand(w, nodeID, "docker_exec", args)
 		default:
 			http.Error(w, "Unknown action: "+action, http.StatusBadRequest)
 		}
@@ -245,6 +262,16 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 		if action == "logs" {
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 			s.proxyCommand(w, nodeID, "docker_logs", []string{containerID})
+			return
+		}
+		if action == "inspect" {
+			w.Header().Set("Content-Type", "application/json")
+			s.proxyCommand(w, nodeID, "docker_inspect", []string{containerID})
+			return
+		}
+		if action == "stats" {
+			w.Header().Set("Content-Type", "application/json")
+			s.proxyCommand(w, nodeID, "docker_stats", []string{containerID})
 			return
 		}
 	}

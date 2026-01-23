@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -11,9 +12,11 @@ import (
 	"os"
 
 	pb "github.com/astracat/docklet/api/proto/v1"
+	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -186,9 +189,106 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 				}
 			}
 		}
+
+	case "docker_inspect":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else if len(cmd.Args) < 1 {
+			errStr = "container id required"
+			exitCode = 1
+		} else {
+			containerID := cmd.Args[0]
+			val, err := a.DockerCli.ContainerInspect(context.Background(), containerID)
+			if err != nil {
+				errStr = err.Error()
+				exitCode = 1
+			} else {
+				b, err := json.Marshal(val)
+				if err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					output = b
+					exitCode = 0
+				}
+			}
+		}
+
+	case "docker_stats":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else if len(cmd.Args) < 1 {
+			errStr = "container id required"
+			exitCode = 1
+		} else {
+			containerID := cmd.Args[0]
+			stats, err := a.DockerCli.ContainerStatsOneShot(context.Background(), containerID)
+			if err != nil {
+				errStr = err.Error()
+				exitCode = 1
+			} else {
+				defer stats.Body.Close()
+				b, err := io.ReadAll(stats.Body)
+				if err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					output = b
+					exitCode = 0
+				}
+			}
+		}
+
+	case "docker_exec":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else if len(cmd.Args) < 2 {
+			errStr = "container id and command required"
+			exitCode = 1
+		} else {
+			containerID := cmd.Args[0]
+			command := cmd.Args[1:]
+
+			execIDResp, err := a.DockerCli.ContainerExecCreate(context.Background(), containerID, types.ExecConfig{
+				AttachStdout: true,
+				AttachStderr: true,
+				Tty:          false,
+				Cmd:          command,
+			})
+			if err != nil {
+				errStr = err.Error()
+				exitCode = 1
+			} else {
+				attachResp, err := a.DockerCli.ContainerExecAttach(context.Background(), execIDResp.ID, types.ExecStartCheck{
+					Tty: false,
+				})
+				if err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					defer attachResp.Close()
+					var stdout, stderr bytes.Buffer
+					if _, err := stdcopy.StdCopy(&stdout, &stderr, attachResp.Reader); err != nil {
+						errStr = err.Error()
+						exitCode = 1
+					} else {
+						if stderr.Len() > 0 {
+							output = append(stdout.Bytes(), stderr.Bytes()...)
+						} else {
+							output = stdout.Bytes()
+						}
+						exitCode = 0
+					}
+				}
+			}
+		}
 	case "docker_run":
 		if a.DockerCli == nil {
 			errStr = "docker client not initialized"
+			exitCode = 1
 			exitCode = 1
 		} else {
 			if len(cmd.Args) < 1 {
