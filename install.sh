@@ -114,14 +114,30 @@ if [ "$MODE" == "hub" ]; then
     echo -e "${GREEN}Building Hub Service...${NC}"
     go build -o bin/hub ./cmd/hub
     
-    # Generate Certs (Safe Mode)
+    # Generate/Reuse Certs (Safe Mode)
     echo -e "${GREEN}Checking Certificates...${NC}"
+    CERTS_PERSIST_DIR="/etc/docklet/certs"
+    $SUDO mkdir -p "$CERTS_PERSIST_DIR"
+
     # Try to detect public/private IP
     MY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
     if [ -z "$MY_IP" ]; then
         MY_IP="127.0.0.1"
     fi
     echo "Detected IP: $MY_IP"
+
+    # If we already have persisted certs, copy them into repo working dir
+    if [ -f "$CERTS_PERSIST_DIR/ca-cert.pem" ]; then
+        mkdir -p certs
+        cp "$CERTS_PERSIST_DIR/ca-cert.pem" certs/ca-cert.pem
+        cp "$CERTS_PERSIST_DIR/server-cert.pem" certs/server-cert.pem 2>/dev/null || true
+        cp "$CERTS_PERSIST_DIR/server-key.pem" certs/server-key.pem 2>/dev/null || true
+        cp "$CERTS_PERSIST_DIR/agent-cert.pem" certs/agent-cert.pem 2>/dev/null || true
+        cp "$CERTS_PERSIST_DIR/agent-key.pem" certs/agent-key.pem 2>/dev/null || true
+        cp "$CERTS_PERSIST_DIR/cli-cert.pem" certs/cli-cert.pem 2>/dev/null || true
+        cp "$CERTS_PERSIST_DIR/cli-key.pem" certs/cli-key.pem 2>/dev/null || true
+        echo -e "${CYAN}Using persisted certificates from $CERTS_PERSIST_DIR${NC}"
+    fi
 
     # Only generate if CA missing, otherwise we might break existing agents
     if [ ! -f "certs/ca-cert.pem" ]; then
@@ -130,6 +146,18 @@ if [ "$MODE" == "hub" ]; then
     else
         echo -e "${CYAN}Certificates already exist. Skipping generation to preserve connections.${NC}"
         echo -e "${CYAN}If you need to regenerate (e.g. IP changed), delete the 'certs' folder and run install again.${NC}"
+    fi
+
+    # Persist certs for future updates (prevents CA rotation on re-clone)
+    if [ -f "certs/ca-cert.pem" ]; then
+        $SUDO cp -f certs/ca-cert.pem "$CERTS_PERSIST_DIR/ca-cert.pem"
+        $SUDO cp -f certs/server-cert.pem "$CERTS_PERSIST_DIR/server-cert.pem" 2>/dev/null || true
+        $SUDO cp -f certs/server-key.pem "$CERTS_PERSIST_DIR/server-key.pem" 2>/dev/null || true
+        $SUDO cp -f certs/agent-cert.pem "$CERTS_PERSIST_DIR/agent-cert.pem" 2>/dev/null || true
+        $SUDO cp -f certs/agent-key.pem "$CERTS_PERSIST_DIR/agent-key.pem" 2>/dev/null || true
+        $SUDO cp -f certs/cli-cert.pem "$CERTS_PERSIST_DIR/cli-cert.pem" 2>/dev/null || true
+        $SUDO cp -f certs/cli-key.pem "$CERTS_PERSIST_DIR/cli-key.pem" 2>/dev/null || true
+        $SUDO chmod 600 "$CERTS_PERSIST_DIR"/* 2>/dev/null || true
     fi
 
     # Build Dashboard
