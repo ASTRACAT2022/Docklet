@@ -114,15 +114,23 @@ if [ "$MODE" == "hub" ]; then
     echo -e "${GREEN}Building Hub Service...${NC}"
     go build -o bin/hub ./cmd/hub
     
-    # Generate Certs
-    echo -e "${GREEN}Generating Certificates...${NC}"
+    # Generate Certs (Safe Mode)
+    echo -e "${GREEN}Checking Certificates...${NC}"
     # Try to detect public/private IP
     MY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
     if [ -z "$MY_IP" ]; then
         MY_IP="127.0.0.1"
     fi
     echo "Detected IP: $MY_IP"
-    go run cmd/certgen/main.go --ip "127.0.0.1,::1,$MY_IP"
+
+    # Only generate if CA missing, otherwise we might break existing agents
+    if [ ! -f "certs/ca-cert.pem" ]; then
+        echo -e "${GREEN}Generating NEW Certificates...${NC}"
+        go run cmd/certgen/main.go --ip "127.0.0.1,::1,$MY_IP"
+    else
+        echo -e "${CYAN}Certificates already exist. Skipping generation to preserve connections.${NC}"
+        echo -e "${CYAN}If you need to regenerate (e.g. IP changed), delete the 'certs' folder and run install again.${NC}"
+    fi
 
     # Build Dashboard
     echo -e "${GREEN}Building Web Dashboard...${NC}"
@@ -141,15 +149,43 @@ if [ "$MODE" == "hub" ]; then
     # Install Systemd Service
     echo -e "${GREEN}Installing Service...${NC}"
     
-    if command -v systemctl &> /dev/null; then
-        # Create Config Dir
-        $SUDO mkdir -p /etc/docklet
+    # Create Config Dir
+    $SUDO mkdir -p /etc/docklet
+
+    # Generate Self-Signed SSL for Web if missing
+    if [ ! -f "/etc/docklet/web-cert.pem" ]; then
+        echo -e "${GREEN}Generating Self-Signed SSL for Web Dashboard...${NC}"
+        $SUDO openssl req -new -newkey rsa:2048 -days 365 -nodes -x509 \
+          -subj "/C=US/ST=Denial/L=Springfield/O=Dis/CN=$MY_IP" \
+          -keyout /etc/docklet/web-key.pem \
+          -out /etc/docklet/web-cert.pem >/dev/null 2>&1 || echo -e "${RED}OpenSSL failed, skipping web SSL${NC}"
+    fi
+
+    # Safe Update of hub.env
+    if [ -f "/etc/docklet/hub.env" ]; then
+        echo -e "${CYAN}Existing configuration found. Performing Safe Update...${NC}"
+        # Only append new keys if missing, or update paths if needed. 
+        # For now, we preserve it. 
+        # But we must ensure DOCKLET_WEB_CERT are set if we just generated them.
+        
+        if ! grep -q "DOCKLET_WEB_CERT" /etc/docklet/hub.env; then
+            echo "DOCKLET_WEB_CERT=/etc/docklet/web-cert.pem" | $SUDO tee -a /etc/docklet/hub.env > /dev/null
+            echo "DOCKLET_WEB_KEY=/etc/docklet/web-key.pem" | $SUDO tee -a /etc/docklet/hub.env > /dev/null
+        fi
+        
+        # Read token for display
+        source /etc/docklet/hub.env
+        BOOTSTRAP_TOKEN=$DOCKLET_BOOTSTRAP_TOKEN
+    else
         echo "DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN" | $SUDO tee /etc/docklet/hub.env > /dev/null
+        echo "DOCKLET_WEB_CERT=/etc/docklet/web-cert.pem" | $SUDO tee -a /etc/docklet/hub.env > /dev/null
+        echo "DOCKLET_WEB_KEY=/etc/docklet/web-key.pem" | $SUDO tee -a /etc/docklet/hub.env > /dev/null
         $SUDO chmod 600 /etc/docklet/hub.env
         $SUDO chown docklet:docklet /etc/docklet/hub.env
+    fi
 
-        # Create Service File
-        cat <<EOF | $SUDO tee /etc/systemd/system/docklet-hub.service
+    # Create Service File
+    cat <<EOF | $SUDO tee /etc/systemd/system/docklet-hub.service
 [Unit]
 Description=Docklet Orchestration Hub
 After=network.target
@@ -175,14 +211,22 @@ EOF
         echo -e "Logs: sudo journalctl -u docklet-hub -f"
     else
         echo -e "${CYAN}Systemd not found. Starting in background...${NC}"
-        export DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
+        # We need to export env vars here manually if not using systemd
+        if [ -f "/etc/docklet/hub.env" ]; then
+             set -a
+             source /etc/docklet/hub.env
+             set +a
+        else
+             export DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
+        fi
+        
         pkill -f "bin/hub" || true
         nohup ./bin/hub > hub.log 2>&1 &
         echo -e "${CYAN}✅ Docklet Hub started (PID $!)!${NC}"
         echo -e "Logs: tail -f hub.log"
     fi
 
-    echo -e "Dashboard: http://<YOUR_IP>:1499"
+    echo -e "Dashboard: https://<YOUR_IP>:1499 (SSL Enabled)"
     echo -e "Bootstrap Token: $BOOTSTRAP_TOKEN"
 
 # --- NODE INSTALLATION ---
