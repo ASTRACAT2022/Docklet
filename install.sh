@@ -39,12 +39,11 @@ fi
 echo -e "${GREEN}Step 1: Installing dependencies...${NC}"
 
 if [ "$(uname)" = "Linux" ]; then
-        if command -v apt-get &> /dev/null; then
-            $SUDO apt-get update
-            $SUDO apt-get install -y git make curl jq tar
-        elif command -v yum &> /dev/null; then
-            $SUDO yum install -y git make curl jq tar
-        fi
+    if command -v apt-get &> /dev/null; then
+        $SUDO apt-get update
+        $SUDO apt-get install -y git make curl jq tar
+    elif command -v yum &> /dev/null; then
+        $SUDO yum install -y git make curl jq tar
     fi
 
     # Install Go 1.25+
@@ -53,13 +52,13 @@ if [ "$(uname)" = "Linux" ]; then
         GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
         # Check if version is old (1.1x - 1.23)
         if [[ "$GO_VER" =~ ^1\.([1-9]|1[0-9]|2[0-3])(\.|$) ]]; then
-             echo "⚠️  Go version $GO_VER is too old. Installing 1.25..."
-             if command -v apt-get &> /dev/null; then $SUDO apt-get remove -y golang-go golang || true; fi
-             if command -v yum &> /dev/null; then $SUDO yum remove -y golang || true; fi
-             $SUDO rm -rf /usr/local/go
+            echo "⚠️  Go version $GO_VER is too old. Installing 1.25..."
+            if command -v apt-get &> /dev/null; then $SUDO apt-get remove -y golang-go golang || true; fi
+            if command -v yum &> /dev/null; then $SUDO yum remove -y golang || true; fi
+            $SUDO rm -rf /usr/local/go
         else
-             NEED_GO=false
-             echo "Found Go version: $GO_VER"
+            NEED_GO=false
+            echo "Found Go version: $GO_VER"
         fi
     fi
 
@@ -73,7 +72,7 @@ if [ "$(uname)" = "Linux" ]; then
         $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz
         rm go1.25.6.linux-amd64.tar.gz
     fi
-    
+
     export PATH=/usr/local/go/bin:$PATH
 fi
 
@@ -185,6 +184,7 @@ if [ "$MODE" == "hub" ]; then
         $SUDO chown docklet:docklet /etc/docklet/hub.env
     fi
 
+    if command -v systemctl &> /dev/null; then
     # Create Service File
     cat <<EOF | $SUDO tee /etc/systemd/system/docklet-hub.service
 [Unit]
