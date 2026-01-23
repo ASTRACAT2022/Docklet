@@ -229,9 +229,10 @@ EOF
 
     echo -e "Dashboard: https://<YOUR_IP>:1499 (SSL Enabled)"
     echo -e "Bootstrap Token: $BOOTSTRAP_TOKEN"
+fi
 
 # --- NODE INSTALLATION ---
-elif [ "$MODE" == "node" ]; then
+if [ "$MODE" == "node" ]; then
     HUB_IP="$3"
     BOOTSTRAP_TOKEN="$4"
 
