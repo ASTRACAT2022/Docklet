@@ -19,20 +19,44 @@ echo -e "${CYAN}🚀 Docklet Auto-Installer${NC}"
 
 # 1. Install Dependencies
 echo -e "${GREEN}Step 1: Installing dependencies (Go, git, make)...${NC}"
+
+# Detect sudo
+SUDO=""
+if [ "$(id -u)" -ne 0 ]; then
+    if command -v sudo &> /dev/null; then
+        SUDO="sudo"
+    else
+        echo -e "${RED}❌ Root or sudo required.${NC}"
+        exit 1
+    fi
+fi
+
 if [ "$(uname)" = "Linux" ]; then
     if command -v apt-get &> /dev/null; then
-        sudo apt-get update && sudo apt-get install -y git make curl jq
+        $SUDO apt-get update && $SUDO apt-get install -y git make curl jq wget tar
     elif command -v yum &> /dev/null; then
-        sudo yum install -y git make curl jq
+        $SUDO yum install -y git make curl jq wget tar
     fi
     
     # Install Go if missing
     if ! command -v go &> /dev/null; then
-        echo "Installing Go..."
-        wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
-        sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+        if [ ! -f "/usr/local/go/bin/go" ]; then
+            echo "Installing Go..."
+            wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+            $SUDO rm -rf /usr/local/go && $SUDO tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+            rm go1.22.0.linux-amd64.tar.gz
+        fi
         export PATH=$PATH:/usr/local/go/bin
-        rm go1.22.0.linux-amd64.tar.gz
+    fi
+fi
+
+# Ensure Go is available
+if ! command -v go &> /dev/null; then
+    # Try adding to path again just in case
+    export PATH=$PATH:/usr/local/go/bin
+    if ! command -v go &> /dev/null; then
+         echo -e "${RED}❌ Go installation failed. Please install Go 1.22 manually.${NC}"
+         exit 1
     fi
 fi
 
@@ -48,7 +72,7 @@ fi
 
 # 3. Build Agent
 echo -e "${GREEN}Step 3: Building Agent...${NC}"
-/usr/local/go/bin/go build -o bin/agent ./cmd/agent
+go build -o bin/agent ./cmd/agent
 
 # 4. Bootstrap Certs
 echo -e "${GREEN}Step 4: Bootstrapping...${NC}"
@@ -76,7 +100,13 @@ RESPONSE=$(curl -s "http://$HUB_IP:1499/api/bootstrap/certs?token=bootstrap-toke
 # Check if jq installed
 if ! command -v jq &> /dev/null; then
     echo "jq not found. Trying to install..."
-    sudo apt-get install -y jq || sudo yum install -y jq
+    if [ "$(uname)" = "Linux" ]; then
+        if command -v apt-get &> /dev/null; then
+            $SUDO apt-get install -y jq
+        elif command -v yum &> /dev/null; then
+            $SUDO yum install -y jq
+        fi
+    fi
 fi
 
 mkdir -p certs
