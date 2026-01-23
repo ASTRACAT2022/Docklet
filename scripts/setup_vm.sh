@@ -41,7 +41,11 @@ fi
 if ! command -v npm &> /dev/null; then
     echo "🔹 Installing Node.js..."
     # Warning: NodeSource script might need sudo/root
-    curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    if [ -n "$SUDO" ]; then
+        curl -fsSL https://deb.nodesource.com/setup_20.x | $SUDO -E bash -
+    else
+        curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
+    fi
     $SUDO apt-get install -y nodejs
 else
     echo "✅ Node.js is already installed"
