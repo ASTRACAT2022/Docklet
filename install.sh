@@ -15,7 +15,7 @@ if [ "$1" != "-install" ] || [ "$2" != "node" ]; then
     exit 1
 fi
 
-echo -e "${CYAN}🚀 Docklet Auto-Installer v1.2${NC}"
+echo -e "${CYAN}🚀 Docklet Auto-Installer v1.3${NC}"
 
 # 1. Install Dependencies
 echo -e "${GREEN}Step 1: Installing dependencies (Go, git, make)...${NC}"
@@ -38,10 +38,24 @@ if [ "$(uname)" = "Linux" ]; then
         $SUDO yum install -y git make curl jq tar
     fi
     
+    # Check for outdated system Go (often 1.19 or older on Debian)
+    if command -v go &> /dev/null; then
+        GO_VER=$(go version | awk '{print $3}' | sed 's/go//')
+        # Simple check: if starts with 1.1, 1.0, etc, it's old. We need 1.22+
+        # Let's just forcefully install 1.22 if we are root/sudo
+        echo "Found Go version: $GO_VER"
+        # If version is less than 1.22 (naive string check for 1.1* or 1.20/1.21)
+        if [[ "$GO_VER" == 1.1* ]] || [[ "$GO_VER" == 1.20* ]] || [[ "$GO_VER" == 1.21* ]]; then
+             echo "⚠️  Go version is too old. Removing system go and installing 1.22..."
+             $SUDO apt-get remove -y golang-go || true
+             $SUDO rm -rf /usr/local/go
+        fi
+    fi
+
     # Install Go if missing
-    if ! command -v go &> /dev/null; then
+    if ! command -v go &> /dev/null || [ ! -d "/usr/local/go" ]; then
         if [ ! -f "/usr/local/go/bin/go" ]; then
-            echo "Installing Go..."
+            echo "Installing Go 1.22..."
             # Try curl if wget is missing
             if command -v wget &> /dev/null; then
                 wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
