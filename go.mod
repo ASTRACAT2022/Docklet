@@ -3,7 +3,7 @@ module github.com/astracat/docklet
 go 1.25.0
 
 require (
-	github.com/docker/docker v24.0.7+incompatible
+	github.com/docker/docker v27.1.1+incompatible
 	github.com/google/uuid v1.6.0
 	github.com/jackc/pgx/v5 v5.8.0
 	github.com/spf13/cobra v1.10.2
