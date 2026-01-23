@@ -10,6 +10,7 @@ import (
 
 	pb "github.com/astracat/docklet/api/proto/v1"
 	"github.com/astracat/docklet/internal/storage"
+	"github.com/google/uuid"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/peer"
@@ -19,6 +20,7 @@ import (
 type AgentSession struct {
 	Stream      pb.DockletService_RegisterStreamServer
 	NodeID      string
+	SessionID   string
 	MachineID   string
 	Version     string
 	ConnectedAt time.Time
@@ -151,6 +153,7 @@ func (s *DockletServer) RegisterStream(stream pb.DockletService_RegisterStreamSe
 	session := &AgentSession{
 		Stream:      stream,
 		NodeID:      nodeID,
+		SessionID:   uuid.NewString(),
 		MachineID:   handshake.MachineId,
 		Version:     handshake.Version,
 		ConnectedAt: time.Now(),
@@ -175,9 +178,14 @@ func (s *DockletServer) RegisterStream(stream pb.DockletService_RegisterStreamSe
 	log.Printf("Agent registered: %s (%s)", nodeID, remoteAddr)
 
 	defer func() {
-		s.agents.Delete(nodeID)
-		// Also cleanup any pending commands for this node?
-		log.Printf("Agent disconnected: %s", nodeID)
+		if cur, ok := s.agents.Load(nodeID); ok {
+			if cur.(*AgentSession) == session {
+				s.agents.Delete(nodeID)
+				log.Printf("Agent disconnected: %s", nodeID)
+				return
+			}
+		}
+		log.Printf("Agent stream ended: %s", nodeID)
 	}()
 
 	// Send Ack/Heartbeat immediately to confirm connection
