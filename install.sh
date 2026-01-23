@@ -1,8 +1,8 @@
 #!/bin/bash
 set -e
 
-# Usage: curl ... | bash -s -- -install node
-# Or just: ./install.sh -install node
+# Usage: curl ... | bash -s -- -install node <HUB_IP>
+# Or: ./install.sh -install node <HUB_IP>
 
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -52,7 +52,22 @@ echo -e "${GREEN}Step 3: Building Agent...${NC}"
 
 # 4. Bootstrap Certs
 echo -e "${GREEN}Step 4: Bootstrapping...${NC}"
-read -p "👉 Enter Hub IP (e.g. 192.168.1.5): " HUB_IP
+
+HUB_IP="$3"
+
+# Handle "IP hub 1.1.1.1" case from user request just in case
+if [ "$3" == "IP" ] && [ "$4" == "hub" ]; then
+    HUB_IP="$5"
+fi
+
+if [ -z "$HUB_IP" ]; then
+    read -p "👉 Enter Hub IP (e.g. 192.168.1.5): " HUB_IP
+fi
+
+if [ -z "$HUB_IP" ]; then
+    echo -e "${RED}❌ IP address is required.${NC}"
+    exit 1
+fi
 
 echo "Fetching certs from $HUB_IP..."
 # Fetch JSON
