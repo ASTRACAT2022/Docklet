@@ -35,10 +35,10 @@ type ExecRequest struct {
 }
 
 const (
-	// Hardcoded for MVP as requested
-	validUser  = "astracat"
-	validPass  = "astracat"
-	validToken = "simple-token-astracat-123" // In real app, generate UUIDs
+	// Default credentials if not set via env
+	defaultUser  = "astracat"
+	defaultPass  = "astracat"
+	validToken   = "simple-token-astracat-123" // In real app, generate UUIDs
 )
 
 func NewHTTPServer(grpcServer *DockletServer, staticPath string) *HTTPServer {
@@ -79,6 +79,16 @@ func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "Invalid request", http.StatusBadRequest)
 		return
+	}
+
+	// Check Env Vars first
+	validUser := os.Getenv("DOCKLET_ADMIN_USER")
+	if validUser == "" {
+		validUser = defaultUser
+	}
+	validPass := os.Getenv("DOCKLET_ADMIN_PASSWORD")
+	if validPass == "" {
+		validPass = defaultPass
 	}
 
 	if req.Username == validUser && req.Password == validPass {
