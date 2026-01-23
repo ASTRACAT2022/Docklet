@@ -39,11 +39,12 @@ fi
 echo -e "${GREEN}Step 1: Installing dependencies...${NC}"
 
 if [ "$(uname)" = "Linux" ]; then
-    if command -v apt-get &> /dev/null; then
-        $SUDO apt-get update
-        $SUDO apt-get install -y git make curl jq tar
-    elif command -v yum &> /dev/null; then
-        $SUDO yum install -y git make curl jq tar
+        if command -v apt-get &> /dev/null; then
+            $SUDO apt-get update
+            $SUDO apt-get install -y git make curl jq tar
+        elif command -v yum &> /dev/null; then
+            $SUDO yum install -y git make curl jq tar
+        fi
     fi
 
     # Install Go 1.25+
