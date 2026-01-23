@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"log"
 	"os"
 
@@ -9,7 +10,10 @@ import (
 )
 
 func main() {
-	hubAddr := "localhost:50051"
+	hubAddrPtr := flag.String("hub", "localhost:50051", "Hub address (host:port)")
+	flag.Parse()
+
+	hubAddr := *hubAddrPtr
 	if envAddr := os.Getenv("DOCKLET_HUB_ADDR"); envAddr != "" {
 		hubAddr = envAddr
 	}
@@ -35,6 +39,9 @@ func main() {
 
 	a := agent.NewAgent(hubAddr, nodeID, caCert, agentCert, agentKey)
 	if err := a.Start(); err != nil {
-		log.Fatalf("Agent crashed: %v", err)
+		log.Printf("Agent crashed: %v. Retrying in 5 seconds...", err)
+        // Add a small delay/loop if needed, or let systemd restart it.
+        // But for better UX logs:
+		os.Exit(1)
 	}
 }
