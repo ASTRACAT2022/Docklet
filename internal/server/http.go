@@ -276,8 +276,17 @@ func (s *HTTPServer) proxyCommand(w http.ResponseWriter, nodeID, cmd string, arg
 }
 
 func (s *HTTPServer) handleBootstrapCerts(w http.ResponseWriter, r *http.Request) {
-	// Simple bootstrap token check
-	if r.URL.Query().Get("token") != "bootstrap-token-123" {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	bootstrapToken := strings.TrimSpace(os.Getenv("DOCKLET_BOOTSTRAP_TOKEN"))
+	if bootstrapToken == "" {
+		bootstrapToken = "bootstrap-token-123"
+	}
+
+	if r.URL.Query().Get("token") != bootstrapToken {
 		http.Error(w, "Invalid bootstrap token", http.StatusUnauthorized)
 		return
 	}
@@ -289,6 +298,8 @@ func (s *HTTPServer) handleBootstrapCerts(w http.ResponseWriter, r *http.Request
 		AgentCert string `json:"agent_cert"`
 		AgentKey  string `json:"agent_key"`
 	}
+
+	w.Header().Set("Content-Type", "application/json")
 
 	// Read files
 	// Assuming certs are in ./certs relative to CWD
@@ -318,4 +329,3 @@ func (s *HTTPServer) handleBootstrapCerts(w http.ResponseWriter, r *http.Request
 func readFile(path string) ([]byte, error) {
 	return os.ReadFile(path)
 }
-
