@@ -114,6 +114,16 @@ if [ "$MODE" == "hub" ]; then
     echo -e "${GREEN}Building Hub Service...${NC}"
     go build -o bin/hub ./cmd/hub
     
+    # Generate Certs
+    echo -e "${GREEN}Generating Certificates...${NC}"
+    # Try to detect public/private IP
+    MY_IP=$(hostname -I 2>/dev/null | awk '{print $1}')
+    if [ -z "$MY_IP" ]; then
+        MY_IP="127.0.0.1"
+    fi
+    echo "Detected IP: $MY_IP"
+    go run cmd/certgen/main.go --ip "127.0.0.1,::1,$MY_IP"
+
     # Build Dashboard
     echo -e "${GREEN}Building Web Dashboard...${NC}"
     cd web/dashboard
@@ -129,16 +139,17 @@ if [ "$MODE" == "hub" ]; then
     fi
 
     # Install Systemd Service
-    echo -e "${GREEN}Installing Systemd Service...${NC}"
+    echo -e "${GREEN}Installing Service...${NC}"
     
-    # Create Config Dir
-    $SUDO mkdir -p /etc/docklet
-    echo "DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN" | $SUDO tee /etc/docklet/hub.env > /dev/null
-    $SUDO chmod 600 /etc/docklet/hub.env
-    $SUDO chown docklet:docklet /etc/docklet/hub.env
+    if command -v systemctl &> /dev/null; then
+        # Create Config Dir
+        $SUDO mkdir -p /etc/docklet
+        echo "DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN" | $SUDO tee /etc/docklet/hub.env > /dev/null
+        $SUDO chmod 600 /etc/docklet/hub.env
+        $SUDO chown docklet:docklet /etc/docklet/hub.env
 
-    # Create Service File
-    cat <<EOF | $SUDO tee /etc/systemd/system/docklet-hub.service
+        # Create Service File
+        cat <<EOF | $SUDO tee /etc/systemd/system/docklet-hub.service
 [Unit]
 Description=Docklet Orchestration Hub
 After=network.target
@@ -156,14 +167,23 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    $SUDO systemctl daemon-reload
-    $SUDO systemctl enable docklet-hub
-    $SUDO systemctl restart docklet-hub
-    
-    echo -e "${CYAN}✅ Docklet Hub installed & running!${NC}"
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable docklet-hub
+        $SUDO systemctl restart docklet-hub
+        
+        echo -e "${CYAN}✅ Docklet Hub installed & running!${NC}"
+        echo -e "Logs: sudo journalctl -u docklet-hub -f"
+    else
+        echo -e "${CYAN}Systemd not found. Starting in background...${NC}"
+        export DOCKLET_BOOTSTRAP_TOKEN=$BOOTSTRAP_TOKEN
+        pkill -f "bin/hub" || true
+        nohup ./bin/hub > hub.log 2>&1 &
+        echo -e "${CYAN}✅ Docklet Hub started (PID $!)!${NC}"
+        echo -e "Logs: tail -f hub.log"
+    fi
+
     echo -e "Dashboard: http://<YOUR_IP>:1499"
     echo -e "Bootstrap Token: $BOOTSTRAP_TOKEN"
-    echo -e "To view logs: sudo journalctl -u docklet-hub -f"
 
 # --- NODE INSTALLATION ---
 elif [ "$MODE" == "node" ]; then
@@ -199,9 +219,10 @@ elif [ "$MODE" == "node" ]; then
     fi
 
     # Install Systemd Service for Agent
-    echo -e "${GREEN}Installing Agent Systemd Service...${NC}"
+    echo -e "${GREEN}Installing Agent Service...${NC}"
     
-    cat <<EOF | $SUDO tee /etc/systemd/system/docklet-agent.service
+    if command -v systemctl &> /dev/null; then
+        cat <<EOF | $SUDO tee /etc/systemd/system/docklet-agent.service
 [Unit]
 Description=Docklet Node Agent
 After=docker.service
@@ -219,10 +240,17 @@ RestartSec=5
 WantedBy=multi-user.target
 EOF
 
-    $SUDO systemctl daemon-reload
-    $SUDO systemctl enable docklet-agent
-    $SUDO systemctl restart docklet-agent
+        $SUDO systemctl daemon-reload
+        $SUDO systemctl enable docklet-agent
+        $SUDO systemctl restart docklet-agent
 
-    echo -e "${CYAN}✅ Docklet Agent installed & running!${NC}"
-    echo -e "Logs: sudo journalctl -u docklet-agent -f"
+        echo -e "${CYAN}✅ Docklet Agent installed & running!${NC}"
+        echo -e "Logs: sudo journalctl -u docklet-agent -f"
+    else
+        echo -e "${CYAN}Systemd not found. Starting in background...${NC}"
+        pkill -f "bin/agent" || true
+        nohup ./bin/agent --hub "$HUB_IP:50051" > agent.log 2>&1 &
+        echo -e "${CYAN}✅ Docklet Agent started (PID $!)!${NC}"
+        echo -e "Logs: tail -f agent.log"
+    fi
 fi
