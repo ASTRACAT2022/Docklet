@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	pb "github.com/astracat/docklet/api/proto/v1"
@@ -22,6 +23,10 @@ type LoginRequest struct {
 
 type LoginResponse struct {
 	Token string `json:"token"`
+}
+
+type RenameRequest struct {
+	Name string `json:"name"`
 }
 
 const (
@@ -109,6 +114,33 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 
 	// Path: /api/nodes/{id}/containers...
 	path := r.URL.Path[len("/api/nodes/"):]
+
+	if strings.HasSuffix(path, "/rename") {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		nodeID := strings.TrimSuffix(path, "/rename")
+		if nodeID == "" {
+			http.Error(w, "Invalid node id", http.StatusBadRequest)
+			return
+		}
+
+		var req RenameRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "Invalid request", http.StatusBadRequest)
+			return
+		}
+		name := strings.TrimSpace(req.Name)
+		if name == "" {
+			http.Error(w, "Name is required", http.StatusBadRequest)
+			return
+		}
+
+		s.proxyCommand(w, nodeID, "node_rename", []string{name})
+		return
+	}
 
 	// Pattern: {nodeID}/containers
 	if len(path) > 11 && path[len(path)-11:] == "/containers" {
@@ -205,6 +237,14 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 			http.Error(w, "Unknown action: "+action, http.StatusBadRequest)
 		}
 		return
+	}
+
+	if r.Method == http.MethodGet {
+		if action == "logs" {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			s.proxyCommand(w, nodeID, "docker_logs", []string{containerID})
+			return
+		}
 	}
 
 	http.NotFound(w, r)

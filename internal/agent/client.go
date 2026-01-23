@@ -164,6 +164,28 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 			}
 		}
 
+	case "docker_logs":
+		if a.DockerCli == nil {
+			errStr = "docker client not initialized"
+			exitCode = 1
+		} else {
+			if len(cmd.Args) < 1 {
+				errStr = "container id required"
+				exitCode = 1
+			} else {
+				containerID := cmd.Args[0]
+				out, err := a.DockerCli.ContainerLogs(context.Background(), containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Follow: false})
+				if err != nil {
+					errStr = err.Error()
+					exitCode = 1
+				} else {
+					defer out.Close()
+					logs, _ := io.ReadAll(out)
+					output = logs
+					exitCode = 0
+				}
+			}
+		}
 	case "docker_run":
 		if a.DockerCli == nil {
 			errStr = "docker client not initialized"
@@ -268,6 +290,14 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 					exitCode = 0
 				}
 			}
+		}
+	case "node_rename":
+		if len(cmd.Args) < 1 {
+			errStr = "name required"
+			exitCode = 1
+		} else {
+			output = []byte(cmd.Args[0])
+			exitCode = 0
 		}
 
 	default:

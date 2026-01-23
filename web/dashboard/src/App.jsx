@@ -7,6 +7,12 @@ function App() {
     const [containers, setContainers] = useState([])
     const [loading, setLoading] = useState(false)
     const [token, setToken] = useState(localStorage.getItem('docklet_token'))
+    const [renameName, setRenameName] = useState('')
+    const [logsOpen, setLogsOpen] = useState(false)
+    const [logsText, setLogsText] = useState('')
+    const [logsLoading, setLogsLoading] = useState(false)
+    const [logsError, setLogsError] = useState('')
+    const [logsContainer, setLogsContainer] = useState(null)
 
     const handleLogin = (newToken) => {
         localStorage.setItem('docklet_token', newToken)
@@ -53,6 +59,77 @@ function App() {
         } finally {
             setLoading(false)
         }
+
+        // Container action functions
+        const startContainer = async (nodeId, containerId) => {
+            try {
+                await fetch(`/api/nodes/${nodeId}/containers/${containerId}/start`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                })
+                fetchContainers(nodeId)
+            } catch (e) { console.error('start error', e) }
+        }
+        const stopContainer = async (nodeId, containerId) => {
+            try {
+                await fetch(`/api/nodes/${nodeId}/containers/${containerId}/stop`, {
+                    method: 'POST',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                })
+                fetchContainers(nodeId)
+            } catch (e) { console.error('stop error', e) }
+        }
+        const removeContainer = async (nodeId, containerId) => {
+            try {
+                await fetch(`/api/nodes/${nodeId}/containers/${containerId}`, {
+                    method: 'DELETE',
+                    headers: { 'Authorization': `Bearer ${token}` },
+                })
+                fetchContainers(nodeId)
+            } catch (e) { console.error('remove error', e) }
+        }
+
+        const fetchLogs = async (nodeId, container) => {
+            setLogsOpen(true)
+            setLogsLoading(true)
+            setLogsError('')
+            setLogsText('')
+            setLogsContainer(container)
+            try {
+                const res = await fetch(`/api/nodes/${nodeId}/containers/${container.Id}/logs`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                })
+                if (!res.ok) throw new Error('Failed')
+                const text = await res.text()
+                setLogsText(text)
+            } catch (e) {
+                console.error('logs error', e)
+                setLogsError('Failed to load logs')
+            } finally {
+                setLogsLoading(false)
+            }
+        }
+
+        const renameNode = async () => {
+            if (!selectedNode) return
+            const trimmed = renameName.trim()
+            if (!trimmed) return
+            try {
+                const res = await fetch(`/api/nodes/${selectedNode.node_id}/rename`, {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': `Bearer ${token}`,
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({ name: trimmed }),
+                })
+                if (!res.ok) throw new Error('Failed')
+                setRenameName('')
+                fetchNodes()
+            } catch (e) {
+                console.error('rename error', e)
+            }
+        }
     }
 
     useEffect(() => {
@@ -93,8 +170,8 @@ function App() {
                                     key={node.node_id}
                                     onClick={() => setSelectedNode(node)}
                                     className={`p-4 rounded border cursor-pointer transition ${selectedNode?.node_id === node.node_id
-                                            ? 'border-blue-500 bg-blue-50'
-                                            : 'border-gray-200 hover:bg-gray-50'
+                                        ? 'border-blue-500 bg-blue-50'
+                                        : 'border-gray-200 hover:bg-gray-50'
                                         }`}
                                 >
                                     <div className="flex justify-between items-center mb-2">
@@ -116,9 +193,27 @@ function App() {
 
                     {/* Containers List */}
                     <div className="col-span-2 bg-white rounded-lg shadow p-6">
-                        <h2 className="text-xl font-semibold mb-4">
+                        <h2 className="text-xl font-semibold mb-2">
                             {selectedNode ? `Containers on ${selectedNode.node_id.substring(0, 8)}...` : 'Select a node'}
                         </h2>
+                        {selectedNode && (
+                            <div className="flex items-center gap-2 mb-4">
+                                <input
+                                    type="text"
+                                    className="flex-1 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
+                                    placeholder="New node name"
+                                    value={renameName}
+                                    onChange={(e) => setRenameName(e.target.value)}
+                                />
+                                <button
+                                    onClick={renameNode}
+                                    disabled={!renameName.trim()}
+                                    className="px-3 py-2 text-sm bg-blue-600 text-white rounded disabled:opacity-50"
+                                >
+                                    Rename
+                                </button>
+                            </div>
+                        )}
 
                         {!selectedNode && (
                             <div className="flex items-center justify-center h-40 text-gray-400">
@@ -141,6 +236,7 @@ function App() {
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Image</th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Status</th>
                                             <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Names</th>
+                                            <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody className="bg-white divide-y divide-gray-200">
@@ -150,11 +246,17 @@ function App() {
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{c.Image}</td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{c.Status}</td>
                                                 <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">{c.Names.join(", ")}</td>
+                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
+                                                    <button onClick={() => startContainer(selectedNode.node_id, c.Id)} className="mr-2 text-green-600 hover:underline">Start</button>
+                                                    <button onClick={() => stopContainer(selectedNode.node_id, c.Id)} className="mr-2 text-yellow-600 hover:underline">Stop</button>
+                                                    <button onClick={() => removeContainer(selectedNode.node_id, c.Id)} className="text-red-600 hover:underline">Delete</button>
+                                                    <button onClick={() => fetchLogs(selectedNode.node_id, c)} className="ml-2 text-blue-600 hover:underline">Logs</button>
+                                                </td>
                                             </tr>
                                         ))}
                                         {containers.length === 0 && (
                                             <tr>
-                                                <td colSpan="4" className="px-6 py-4 text-center text-gray-500">No containers running</td>
+                                                <td colSpan="5" className="px-6 py-4 text-center text-gray-500">No containers running</td>
                                             </tr>
                                         )}
                                     </tbody>
@@ -164,6 +266,31 @@ function App() {
                     </div>
                 </div>
             </div>
+            {logsOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+                    <div className="bg-white rounded-lg shadow-lg w-full max-w-3xl">
+                        <div className="flex items-center justify-between border-b px-4 py-3">
+                            <div className="text-sm font-semibold text-gray-700">
+                                Logs {logsContainer ? logsContainer.Id.substring(0, 12) : ''}
+                            </div>
+                            <button onClick={() => setLogsOpen(false)} className="text-gray-500 hover:text-gray-700 text-sm">
+                                Close
+                            </button>
+                        </div>
+                        <div className="p-4">
+                            {logsLoading && <div className="text-gray-500">Loading...</div>}
+                            {!logsLoading && logsError && (
+                                <div className="text-red-600 text-sm">{logsError}</div>
+                            )}
+                            {!logsLoading && !logsError && (
+                                <pre className="text-xs bg-gray-900 text-gray-100 p-4 rounded overflow-auto max-h-96 whitespace-pre-wrap">
+                                    {logsText || 'No logs'}
+                                </pre>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     )
 }
