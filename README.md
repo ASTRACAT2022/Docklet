@@ -39,10 +39,27 @@ graph TD
 
 ### 1. Installation
 
-Clone the repository and build the binaries:
+**⚡️ Fast Setup (Fresh Linux VM)**
+If you are running on a fresh Debian/Ubuntu server (e.g. root on a VPS), use our setup script to install dependencies (Go, Node.js, Make) and build the project automatically:
+
 ```bash
-git clone https://github.com/astracat/docklet.git
-cd docklet
+git clone https://github.com/ASTRACAT2022/Docklet.git
+cd Docklet
+chmod +x scripts/setup_vm.sh
+./scripts/setup_vm.sh
+
+# Reload shell configuration
+source ~/.bashrc
+
+# Build everything
+make all
+```
+
+**🔧 Manual Setup (Dev Machine)**
+If you already have Go and Node.js installed:
+```bash
+git clone https://github.com/ASTRACAT2022/Docklet.git
+cd Docklet
 make build
 ```
 
