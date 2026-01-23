@@ -83,17 +83,18 @@ This creates a `certs/` directory containing:
 
 ### 3. Running the Hub
 
-The Hub manages the fleet. It serves the gRPC API on port `:50051` and the Web Dashboard on `:8080`.
+The Hub manages the fleet. It serves the gRPC API on port `:50051` and the Web Dashboard on `:1499`.
 
-**Option A: With Database (Recommended)**
+**Production Service (Systemd)**
+To run the Hub in the background with auto-restart:
 ```bash
-export DATABASE_URL="postgres://user:pass@localhost:5432/docklet"
-./bin/hub
+chmod +x scripts/deploy_hub.sh
+./scripts/deploy_hub.sh
 ```
 
-**Option B: In-Memory (Dev/Demo)**
+**Manual Dev Run**
 ```bash
-# Just run it. It will warn about missing DB and switch to memory.
+# Just run it (starts in foreground)
 ./bin/hub
 ```
 
