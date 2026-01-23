@@ -30,10 +30,12 @@ type Agent struct {
 
 func NewAgent(hubAddr string, nodeID string, caCert, certFile, keyFile string) *Agent {
 	// Init Docker Client
-	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// Force API 1.45 (Daemon requires >= 1.44)
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithVersion("1.45"))
 	if err != nil {
 		log.Printf("Warning: Failed to create Docker client: %v", err)
-		// We continue, might fail later when executing commands
+	} else {
+		log.Printf("Docker Client Initialized. API Version: %s", cli.ClientVersion())
 	}
 
 	return &Agent{
