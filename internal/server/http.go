@@ -65,6 +65,15 @@ func (s *HTTPServer) Start(addr string) error {
 		mux.Handle("/", fs)
 	}
 
+	// Check for custom SSL certs
+	certFile := os.Getenv("DOCKLET_WEB_CERT")
+	keyFile := os.Getenv("DOCKLET_WEB_KEY")
+
+	if certFile != "" && keyFile != "" {
+		log.Printf("HTTP Server listening on %s (HTTPS)", addr)
+		return http.ListenAndServeTLS(addr, certFile, keyFile, mux)
+	}
+
 	log.Printf("HTTP Server listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
 }

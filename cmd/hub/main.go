@@ -69,9 +69,27 @@ func main() {
 	// Start HTTP Server
 	go func() {
 		httpSrv := server.NewHTTPServer(hubServer, "./web/dashboard/dist")
-		if err := httpSrv.Start(":1499"); err != nil {
-			log.Printf("HTTP Server error: %v", err)
-		}
+        // Check for custom SSL certs via Env
+        certFile := os.Getenv("DOCKLET_WEB_CERT")
+        keyFile := os.Getenv("DOCKLET_WEB_KEY")
+        
+        addr := ":1499"
+        if certFile != "" && keyFile != "" {
+            log.Printf("Starting Web Dashboard on %s (HTTPS)", addr)
+             // StartTLS is not exposed in HTTPServer struct, let's expose it or just use Start which handles it inside?
+             // Actually I modified http.go to handle it inside Start() if env vars are read there?
+             // Wait, I modified Start() in http.go but I didn't change the signature.
+             // Let's rely on Start() checking the env vars or better yet, pass them?
+             // The previous tool call modified http.go's Start method to read env vars directly.
+             // So here we just call Start.
+             if err := httpSrv.Start(addr); err != nil {
+                 log.Printf("HTTP Server error: %v", err)
+             }
+        } else {
+             if err := httpSrv.Start(addr); err != nil {
+			    log.Printf("HTTP Server error: %v", err)
+		    }
+        }
 	}()
 
 	log.Printf("Docklet Hub listening on %s", port)
