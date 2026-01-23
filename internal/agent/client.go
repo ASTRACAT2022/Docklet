@@ -140,17 +140,22 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 			errStr = "docker client not initialized"
 			exitCode = 1
 		} else {
+			log.Println("Executing ContainerList...")
 			containers, err := a.DockerCli.ContainerList(context.Background(), types.ContainerListOptions{All: true})
 			if err != nil {
+				log.Printf("ContainerList error: %v", err)
 				errStr = err.Error()
 				exitCode = 1
 			} else {
+				log.Printf("Found %d containers", len(containers))
 				// Marshal to JSON
 				val, err := json.Marshal(containers)
 				if err != nil {
+					log.Printf("JSON Marshal error: %v", err)
 					errStr = err.Error()
 					exitCode = 1
 				} else {
+					log.Printf("Marshaled JSON size: %d bytes", len(val))
 					output = val
 					exitCode = 0
 				}
