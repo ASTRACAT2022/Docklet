@@ -32,6 +32,7 @@ function App() {
     const [createName, setCreateName] = useState('')
     const [createPorts, setCreatePorts] = useState([{ host: '', container: '' }])
     const [createEnv, setCreateEnv] = useState('')
+    const [createAutoRestart, setCreateAutoRestart] = useState(true)
     const [createLoading, setCreateLoading] = useState(false)
     const [createError, setCreateError] = useState('')
 
@@ -437,7 +438,8 @@ function App() {
             image: createImage.trim(),
             name: createName.trim(),
             ports: ports,
-            env: env
+            env: env,
+            auto_restart: createAutoRestart,
         }
 
         try {
@@ -460,6 +462,7 @@ function App() {
             setCreateName('')
             setCreatePorts([{ host: '', container: '' }])
             setCreateEnv('')
+            setCreateAutoRestart(true)
             fetchContainers(selectedNode.node_id)
         } catch (e) {
             console.error('create error', e)
@@ -1079,6 +1082,15 @@ function App() {
                                     value={createName}
                                     onChange={(e) => setCreateName(e.target.value)}
                                 />
+                            </div>
+                            <div className="flex items-center gap-3 bg-zinc-950/40 border border-zinc-800 rounded p-3">
+                                <input
+                                    type="checkbox"
+                                    className="accent-blue-500"
+                                    checked={createAutoRestart}
+                                    onChange={(e) => setCreateAutoRestart(e.target.checked)}
+                                />
+                                <div className="text-sm text-zinc-300">Auto-restart if container exits</div>
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Ports (Host : Container)</label>

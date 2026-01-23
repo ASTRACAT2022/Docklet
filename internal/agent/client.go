@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 
 	pb "github.com/astracat/docklet/api/proto/v1"
 	"github.com/docker/docker/api/types"
@@ -300,6 +301,8 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 				type RunConfig struct {
 					Image string `json:"image"`
 					Name  string `json:"name"`
+					AutoRestart *bool  `json:"auto_restart"`
+					RestartPolicy string `json:"restart_policy"`
 					Ports []struct {
 						Host      string `json:"host"`
 						Container string `json:"container"`
@@ -335,6 +338,21 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 						// Prepare Host Config (Ports)
 						hostConfig := &container.HostConfig{
 							PortBindings: nat.PortMap{},
+						}
+
+						// Default auto-restart unless explicitly disabled
+						restartPolicy := strings.TrimSpace(config.RestartPolicy)
+						if restartPolicy == "" {
+							restartPolicy = strings.TrimSpace(os.Getenv("DOCKLET_DEFAULT_RESTART_POLICY"))
+						}
+						if restartPolicy == "" {
+							restartPolicy = "unless-stopped"
+						}
+						if config.AutoRestart != nil && !*config.AutoRestart {
+							restartPolicy = "no"
+						}
+						if restartPolicy != "no" && restartPolicy != "none" && restartPolicy != "" {
+							hostConfig.RestartPolicy = container.RestartPolicy{Name: container.RestartPolicyMode(restartPolicy)}
 						}
 
 						for _, p := range config.Ports {
@@ -396,6 +414,21 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 						errStr = string(out) + "\n" + err.Error()
 						exitCode = 1
 					} else {
+						restartPolicy := strings.TrimSpace(os.Getenv("DOCKLET_STACK_RESTART_POLICY"))
+						if restartPolicy == "" {
+							restartPolicy = "unless-stopped"
+						}
+						if restartPolicy != "no" && restartPolicy != "none" {
+							idsCmd := exec.Command("docker", "ps", "-aq", "--filter", fmt.Sprintf("label=com.docker.compose.project=%s", stackName))
+							idsOut, idsErr := idsCmd.CombinedOutput()
+							if idsErr == nil {
+								ids := strings.Fields(string(idsOut))
+								for _, id := range ids {
+									upd := exec.Command("docker", "update", "--restart", restartPolicy, id)
+									_, _ = upd.CombinedOutput()
+								}
+							}
+						}
 						output = out
 						exitCode = 0
 					}
