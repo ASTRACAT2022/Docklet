@@ -1,0 +1,86 @@
+#!/bin/bash
+set -e
+
+# Usage: curl ... | bash -s -- -install node
+# Or just: ./install.sh -install node
+
+GREEN='\033[0;32m'
+CYAN='\033[0;36m'
+RED='\033[0;31m'
+NC='\033[0m'
+
+# Check args
+if [ "$1" != "-install" ] || [ "$2" != "node" ]; then
+    echo "Usage: $0 -install node"
+    exit 1
+fi
+
+echo -e "${CYAN}🚀 Docklet Auto-Installer${NC}"
+
+# 1. Install Dependencies
+echo -e "${GREEN}Step 1: Installing dependencies (Go, git, make)...${NC}"
+if [ "$(uname)" = "Linux" ]; then
+    if command -v apt-get &> /dev/null; then
+        sudo apt-get update && sudo apt-get install -y git make curl jq
+    elif command -v yum &> /dev/null; then
+        sudo yum install -y git make curl jq
+    fi
+    
+    # Install Go if missing
+    if ! command -v go &> /dev/null; then
+        echo "Installing Go..."
+        wget -q https://go.dev/dl/go1.22.0.linux-amd64.tar.gz
+        sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf go1.22.0.linux-amd64.tar.gz
+        export PATH=$PATH:/usr/local/go/bin
+        rm go1.22.0.linux-amd64.tar.gz
+    fi
+fi
+
+# 2. Clone Repo
+echo -e "${GREEN}Step 2: Cloning Docklet...${NC}"
+if [ -d "Docklet" ]; then
+    cd Docklet
+    git pull
+else
+    git clone https://github.com/ASTRACAT2022/Docklet.git
+    cd Docklet
+fi
+
+# 3. Build Agent
+echo -e "${GREEN}Step 3: Building Agent...${NC}"
+/usr/local/go/bin/go build -o bin/agent ./cmd/agent
+
+# 4. Bootstrap Certs
+echo -e "${GREEN}Step 4: Bootstrapping...${NC}"
+read -p "👉 Enter Hub IP (e.g. 192.168.1.5): " HUB_IP
+
+echo "Fetching certs from $HUB_IP..."
+# Fetch JSON
+RESPONSE=$(curl -s "http://$HUB_IP:1499/api/bootstrap/certs?token=bootstrap-token-123")
+
+# Check if jq installed
+if ! command -v jq &> /dev/null; then
+    echo "jq not found. Trying to install..."
+    sudo apt-get install -y jq || sudo yum install -y jq
+fi
+
+mkdir -p certs
+echo "$RESPONSE" | jq -r .ca_cert > certs/ca-cert.pem
+echo "$RESPONSE" | jq -r .agent_cert > certs/agent-cert.pem
+echo "$RESPONSE" | jq -r .agent_key > certs/agent-key.pem
+
+if [ ! -s certs/agent-key.pem ]; then
+    echo -e "${RED}❌ Failed to fetch certs. Check Hub IP and ensure Hub is running.${NC}"
+    exit 1
+fi
+
+echo "✅ Certs installed."
+
+# 5. Run
+echo -e "${GREEN}Step 5: Starting Agent...${NC}"
+# Run in background or foreground? User said "everything is ready node connected"
+# Let's run it in background using nohup or just start it
+echo "Starting agent connected to $HUB_IP:50051..."
+nohup ./bin/agent --hub "$HUB_IP:50051" > agent.log 2>&1 &
+
+echo -e "${CYAN}✅ Node connected! Logs: tail -f agent.log${NC}"

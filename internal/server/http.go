@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -48,6 +49,7 @@ func (s *HTTPServer) Start(addr string) error {
 
 	// Public Routes
 	mux.HandleFunc("/api/login", s.handleLogin)
+	mux.HandleFunc("/api/bootstrap/certs", s.handleBootstrapCerts)
 
 	// Protected Routes (manually wrapped middleware)
 	mux.HandleFunc("/api/nodes", s.authMiddleware(s.handleListNodes))
@@ -272,3 +274,48 @@ func (s *HTTPServer) proxyCommand(w http.ResponseWriter, nodeID, cmd string, arg
 
 	w.Write(resp.Output)
 }
+
+func (s *HTTPServer) handleBootstrapCerts(w http.ResponseWriter, r *http.Request) {
+	// Simple bootstrap token check
+	if r.URL.Query().Get("token") != "bootstrap-token-123" {
+		http.Error(w, "Invalid bootstrap token", http.StatusUnauthorized)
+		return
+	}
+
+	// Create a zip or just return JSON with file contents?
+	// For simplicity, let's return a JSON with 3 files.
+	type CertsResponse struct {
+		CACert    string `json:"ca_cert"`
+		AgentCert string `json:"agent_cert"`
+		AgentKey  string `json:"agent_key"`
+	}
+
+	// Read files
+	// Assuming certs are in ./certs relative to CWD
+	ca, err := readFile("certs/ca-cert.pem")
+	if err != nil {
+		http.Error(w, "CA missing", http.StatusInternalServerError)
+		return
+	}
+	cert, err := readFile("certs/agent-cert.pem")
+	if err != nil {
+		http.Error(w, "Agent cert missing", http.StatusInternalServerError)
+		return
+	}
+	key, err := readFile("certs/agent-key.pem")
+	if err != nil {
+		http.Error(w, "Agent key missing", http.StatusInternalServerError)
+		return
+	}
+
+	json.NewEncoder(w).Encode(CertsResponse{
+		CACert:    string(ca),
+		AgentCert: string(cert),
+		AgentKey:  string(key),
+	})
+}
+
+func readFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}
+
