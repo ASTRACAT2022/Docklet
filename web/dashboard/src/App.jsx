@@ -43,6 +43,15 @@ function App() {
     const [stackLoading, setStackLoading] = useState(false)
     const [stackError, setStackError] = useState('')
 
+    // Cluster State
+    const [clusterOpen, setClusterOpen] = useState(false)
+    const [clusterNodeIds, setClusterNodeIds] = useState([])
+    const [clusterName, setClusterName] = useState('')
+    const [clusterContent, setClusterContent] = useState('')
+    const [clusterLoading, setClusterLoading] = useState(false)
+    const [clusterError, setClusterError] = useState('')
+    const [clusterResults, setClusterResults] = useState([])
+
     const handleLogin = (newToken) => {
         localStorage.setItem('docklet_token', newToken)
         setToken(newToken)
@@ -153,6 +162,57 @@ function App() {
             setStackError(e.message)
         } finally {
             setStackLoading(false)
+        }
+    }
+
+    const toggleClusterNode = (nodeId) => {
+        setClusterNodeIds((prev) => {
+            if (prev.includes(nodeId)) {
+                return prev.filter((x) => x !== nodeId)
+            }
+            return [...prev, nodeId]
+        })
+    }
+
+    const deployCluster = async () => {
+        if (!clusterName.trim() || !clusterContent.trim()) {
+            setClusterError('Name and Content required')
+            return
+        }
+        if (clusterNodeIds.length === 0) {
+            setClusterError('Select at least one node')
+            return
+        }
+
+        setClusterLoading(true)
+        setClusterError('')
+        setClusterResults([])
+        try {
+            const res = await fetch('/api/clusters/deploy', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    name: clusterName.trim(),
+                    content: clusterContent,
+                    nodes: clusterNodeIds,
+                }),
+            })
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed to deploy cluster')
+            }
+            const data = await res.json()
+            setClusterResults(data.results || [])
+            fetchNodes()
+            if (selectedNode) fetchContainers(selectedNode.node_id)
+        } catch (e) {
+            console.error('cluster error', e)
+            setClusterError(e.message)
+        } finally {
+            setClusterLoading(false)
         }
     }
 
@@ -367,7 +427,21 @@ function App() {
                 <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
                     {/* Nodes List */}
                     <div className="col-span-1 bg-zinc-900 rounded-lg shadow-xl border border-zinc-800 p-6 h-fit">
-                        <h2 className="text-xl font-semibold mb-4 text-zinc-300">Nodes</h2>
+                        <div className="flex items-center justify-between mb-4">
+                            <h2 className="text-xl font-semibold text-zinc-300">Nodes</h2>
+                            <button
+                                onClick={() => {
+                                    setClusterOpen(true)
+                                    setClusterError('')
+                                    setClusterResults([])
+                                    setClusterNodeIds([])
+                                }}
+                                disabled={nodes.length === 0}
+                                className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium"
+                            >
+                                Cluster
+                            </button>
+                        </div>
                         <div className="space-y-3">
                             {nodes.map(node => (
                                 <div
@@ -585,6 +659,142 @@ function App() {
                                         Deploying...
                                     </>
                                 ) : 'Deploy Stack'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {clusterOpen && (
+                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-6xl max-h-[90vh] flex flex-col">
+                        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+                            <div className="text-base font-semibold text-zinc-200">Deploy Cluster (Multi-Node Compose)</div>
+                            <button onClick={() => setClusterOpen(false)} className="text-zinc-500 hover:text-zinc-300">
+                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
+                                    <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                                </svg>
+                            </button>
+                        </div>
+
+                        <div className="p-6 flex-1 overflow-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <div className="bg-zinc-950/30 border border-zinc-800 rounded-lg p-4">
+                                <div className="flex items-center justify-between mb-3">
+                                    <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Select Nodes</div>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setClusterNodeIds(nodes.map((n) => n.node_id))}
+                                            className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors"
+                                        >
+                                            All
+                                        </button>
+                                        <button
+                                            onClick={() => setClusterNodeIds([])}
+                                            className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors"
+                                        >
+                                            Clear
+                                        </button>
+                                    </div>
+                                </div>
+                                <div className="space-y-2 max-h-[60vh] overflow-auto pr-1">
+                                    {nodes.map((n) => (
+                                        <label
+                                            key={n.node_id}
+                                            className="flex items-center gap-3 p-3 rounded border border-zinc-800 bg-zinc-900/40 hover:bg-zinc-900 cursor-pointer"
+                                        >
+                                            <input
+                                                type="checkbox"
+                                                className="accent-purple-500"
+                                                checked={clusterNodeIds.includes(n.node_id)}
+                                                onChange={() => toggleClusterNode(n.node_id)}
+                                            />
+                                            <div className="flex-1 min-w-0">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="font-mono text-xs text-blue-400 truncate">{n.node_id}</div>
+                                                    <span className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-full ${
+                                                        n.status === 'connected'
+                                                            ? 'bg-green-900/30 text-green-400 border border-green-900'
+                                                            : 'bg-red-900/30 text-red-400 border border-red-900'
+                                                    }`}>
+                                                        {n.status}
+                                                    </span>
+                                                </div>
+                                                <div className="text-[11px] text-zinc-500 truncate">{n.remote_addr}</div>
+                                            </div>
+                                        </label>
+                                    ))}
+                                    {nodes.length === 0 && <div className="text-zinc-500 text-sm">No nodes connected</div>}
+                                </div>
+                            </div>
+
+                            <div className="lg:col-span-2 space-y-4 flex flex-col">
+                                <div>
+                                    <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Stack Name</label>
+                                    <input
+                                        type="text"
+                                        className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-purple-500 transition-colors"
+                                        placeholder="my-cluster-stack"
+                                        value={clusterName}
+                                        onChange={(e) => setClusterName(e.target.value)}
+                                    />
+                                </div>
+                                <div className="flex-1 flex flex-col min-h-[280px]">
+                                    <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Docker Compose (YAML)</label>
+                                    <textarea
+                                        className="flex-1 w-full p-4 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-purple-500 transition-colors resize-none leading-relaxed"
+                                        placeholder={`version: '3'\nservices:\n  web:\n    image: nginx`}
+                                        value={clusterContent}
+                                        onChange={(e) => setClusterContent(e.target.value)}
+                                        spellCheck={false}
+                                    />
+                                </div>
+
+                                {clusterError && (
+                                    <div className="text-red-400 text-sm bg-red-900/20 p-3 rounded border border-red-900/50">
+                                        {clusterError}
+                                    </div>
+                                )}
+
+                                {clusterResults.length > 0 && (
+                                    <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                                        <div className="text-xs font-semibold text-zinc-400 mb-2 uppercase tracking-wider">Results</div>
+                                        <div className="space-y-2 max-h-48 overflow-auto pr-1">
+                                            {clusterResults.map((r) => (
+                                                <div key={r.node_id} className="flex items-start justify-between gap-3 p-3 rounded border border-zinc-800 bg-zinc-900/40">
+                                                    <div className="min-w-0">
+                                                        <div className="font-mono text-xs text-blue-400 truncate">{r.node_id}</div>
+                                                        {r.error && <div className="text-xs text-red-400 mt-1 whitespace-pre-wrap break-words">{r.error}</div>}
+                                                    </div>
+                                                    <div className={`text-xs font-bold px-2 py-1 rounded ${
+                                                        r.ok ? 'bg-green-900/30 text-green-400 border border-green-900' : 'bg-red-900/30 text-red-400 border border-red-900'
+                                                    }`}>
+                                                        {r.ok ? 'OK' : 'FAIL'}
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/50">
+                            <button
+                                onClick={() => setClusterOpen(false)}
+                                className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 text-sm transition-colors"
+                            >
+                                Close
+                            </button>
+                            <button
+                                onClick={deployCluster}
+                                disabled={clusterLoading || !clusterName.trim() || !clusterContent.trim() || clusterNodeIds.length === 0}
+                                className="px-6 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium flex items-center"
+                            >
+                                {clusterLoading ? (
+                                    <>
+                                        <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                        Deploying...
+                                    </>
+                                ) : 'Deploy Cluster'}
                             </button>
                         </div>
                     </div>

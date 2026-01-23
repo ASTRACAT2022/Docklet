@@ -58,6 +58,7 @@ func (s *HTTPServer) Start(addr string) error {
 	// Protected Routes (manually wrapped middleware)
 	mux.HandleFunc("/api/nodes", s.authMiddleware(s.handleListNodes))
 	mux.HandleFunc("/api/nodes/", s.authMiddleware(s.handleNodeAction))
+	mux.HandleFunc("/api/clusters/deploy", s.authMiddleware(s.handleClusterDeploy))
 
 	// Static Files
 	if s.staticPath != "" {
@@ -76,6 +77,92 @@ func (s *HTTPServer) Start(addr string) error {
 
 	log.Printf("HTTP Server listening on %s", addr)
 	return http.ListenAndServe(addr, mux)
+}
+
+func (s *HTTPServer) handleClusterDeploy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	type ClusterDeployRequest struct {
+		Name    string   `json:"name"`
+		Content string   `json:"content"`
+		Nodes   []string `json:"nodes"`
+	}
+
+	var req ClusterDeployRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	req.Name = strings.TrimSpace(req.Name)
+	if req.Name == "" || strings.TrimSpace(req.Content) == "" {
+		http.Error(w, "Name and content required", http.StatusBadRequest)
+		return
+	}
+	if len(req.Nodes) == 0 {
+		http.Error(w, "nodes required", http.StatusBadRequest)
+		return
+	}
+
+	type ClusterDeployResult struct {
+		NodeID    string `json:"node_id"`
+		OK        bool   `json:"ok"`
+		ExitCode  int32  `json:"exit_code,omitempty"`
+		Error     string `json:"error,omitempty"`
+		Output    string `json:"output,omitempty"`
+		Timestamp int64  `json:"timestamp"`
+	}
+
+	results := make([]ClusterDeployResult, 0, len(req.Nodes))
+	now := time.Now().Unix()
+
+	for _, nodeID := range req.Nodes {
+		nodeID = strings.TrimSpace(nodeID)
+		if nodeID == "" {
+			continue
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+		resp, err := s.grpcServer.ExecuteCommand(ctx, &pb.ExecuteCommandRequest{
+			NodeId:  nodeID,
+			Command: "stack_up",
+			Args:    []string{req.Name, req.Content},
+		})
+		cancel()
+
+		if err != nil {
+			results = append(results, ClusterDeployResult{
+				NodeID:    nodeID,
+				OK:        false,
+				Error:     err.Error(),
+				Timestamp: now,
+			})
+			continue
+		}
+
+		ok := resp.ExitCode == 0
+		errMsg := ""
+		if !ok {
+			errMsg = resp.Error
+		}
+
+		results = append(results, ClusterDeployResult{
+			NodeID:    nodeID,
+			OK:        ok,
+			ExitCode:  resp.ExitCode,
+			Error:     errMsg,
+			Output:    string(resp.Output),
+			Timestamp: now,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"results": results,
+	})
 }
 
 func (s *HTTPServer) handleLogin(w http.ResponseWriter, r *http.Request) {
