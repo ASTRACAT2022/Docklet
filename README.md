@@ -99,6 +99,17 @@ export DATABASE_URL="postgres://user:pass@localhost:5432/docklet"
 
 ### 4. Running an Agent
 
+**Quick Deployment (Systemd)**
+We provide a script to install the agent as a systemd service (auto-restart).
+
+1.  **Transfer Certificates**: Copy `certs/` folder from Hub to the Agent machine.
+2.  **Run Deploy Script**:
+    ```bash
+    chmod +x scripts/deploy_agent.sh
+    ./scripts/deploy_agent.sh <HUB_IP>:50051
+    ```
+
+**Manual Run**
 The Agent runs on the machine where you want to run containers.
 *Ensure `certs/` are available to the agent.*
 
