@@ -2,9 +2,9 @@
 
 **Docklet** is a secure, decentralized orchestration platform for Docker containers. It enables you to manage thousands of distributed agents from a central hub using a unified CLI and Web Dashboard.
 
-![Status Beta](https://img.shields.io/badge/status-beta-yellow) ![License MIT](https://img.shields.io/badge/license-MIT-blue) ![Go 1.22](https://img.shields.io/badge/go-1.22-cyan)
+![Status Beta](https://img.shields.io/badge/status-beta-yellow) ![License MIT](https://img.shields.io/badge/license-MIT-blue) ![Go 1.24](https://img.shields.io/badge/go-1.24-cyan)
 
-## 📚 Wiki & Architecture
+## 📚 Architecture
 
 Docklet connects distributed **Agents** to a central **Hub** over a secure gRPC connection.
 
@@ -22,164 +22,108 @@ graph TD
 ```
 
 ### Key Features
-*   **Secure by Default**: All traffic is encrypted and authenticated using Mutual TLS (mTLS).
+*   **Secure by Default**: All traffic is encrypted and authenticated using Mutual TLS (mTLS) or Secure Bootstrap Tokens.
 *   **Firewall Friendly**: Agents connect outbound to the Hub; no open ports required on Agents.
-*   **Hybrid persistence**: Stores state in PostgreSQL, but falls back to In-Memory if DB is offline.
-*   **Web Dashboard**: built-in React/Vite UI for monitoring your fleet.
+*   **Web Dashboard**: Built-in React/Vite UI for managing containers, launching apps, and monitoring logs.
+*   **Zero-Config Deployment**: Single script installation for both Hub and Agents.
 
 ---
 
-## 🚀 Getting Started
+## 🚀 Getting Started (Production)
 
-### Prerequisites
-*   Go 1.22+
-*   Node.js & npm (for Dashboard)
-*   Docker (running locally)
-*   PostgreSQL (optional)
+We provide a single `install.sh` script that handles dependencies (Go 1.24+, Node.js), builds the project, and installs systemd services.
 
-### 1. Installation
-
-**⚡️ Fast Setup (Fresh Linux VM)**
-If you are running on a fresh Debian/Ubuntu server (e.g. root on a VPS), use our setup script to install dependencies (Go, Node.js, Make) and build the project automatically:
+### 1. Deploy the Hub (Control Plane)
+Run this on your central server:
 
 ```bash
-git clone https://github.com/ASTRACAT2022/Docklet.git
-cd Docklet
-chmod +x scripts/setup_vm.sh
-./scripts/setup_vm.sh
-
-# Reload shell configuration
-source ~/.bashrc
-
-# Build everything
-make all
+curl -fsSL https://raw.githubusercontent.com/ASTRACAT2022/Docklet/main/install.sh | bash -s -- -install hub
 ```
 
-**🔧 Manual Setup (Dev Machine)**
-If you already have Go and Node.js installed:
-```bash
-git clone https://github.com/ASTRACAT2022/Docklet.git
-cd Docklet
-make build
+**Output:**
 ```
+✅ Docklet Hub installed & running!
+Dashboard: http://<YOUR_IP>:1499
+Bootstrap Token: a1b2c3d4e5f6...
+```
+*Save the Bootstrap Token! You will need it to connect agents.*
 
-The binaries will be created in the `bin/` directory:
-- `bin/hub`
-- `bin/agent`
-- `bin/cli`
-
-### 2. Security Setup (Certificates)
-
-Docklet uses mTLS. You must generate certificates before running any component. We provide a tool for this:
+### 2. Deploy Agents (Nodes)
+Run this on any server where you want to run containers:
 
 ```bash
-go run cmd/certgen/main.go
+curl -fsSL https://raw.githubusercontent.com/ASTRACAT2022/Docklet/main/install.sh | bash -s -- -install node <HUB_IP> <BOOTSTRAP_TOKEN>
 ```
-This creates a `certs/` directory containing:
-- `ca-cert.pem`: Root CA (Trust anchor)
-- `server-*.pem`: Keys for the Hub
-- `agent-*.pem`: Keys for Agents
-- `client-*.pem`: Keys for the CLI
+*   `<HUB_IP>`: The IP address of your Hub server.
+*   `<BOOTSTRAP_TOKEN>`: The token generated during Hub installation.
 
-### 3. Running the Hub
-
-The Hub manages the fleet. It serves the gRPC API on port `:50051` and the Web Dashboard on `:1499`.
-
-**Production Service (Systemd)**
-To run the Hub in the background with auto-restart:
-```bash
-chmod +x scripts/deploy_hub.sh
-./scripts/deploy_hub.sh
-```
-
-**Manual Dev Run**
-```bash
-# Just run it (starts in foreground)
-./bin/hub
-```
-
-### 4. Running an Agent
-
-**Quick Deployment (Systemd)**
-We provide a script to install the agent as a systemd service (auto-restart).
-
-1.  **Transfer Certificates**: Copy `certs/` folder from Hub to the Agent machine.
-2.  **Run Deploy Script**:
-    ```bash
-    chmod +x scripts/deploy_agent.sh
-    ./scripts/deploy_agent.sh <HUB_IP>:50051
-    ```
-
-**Manual Run**
-The Agent runs on the machine where you want to run containers.
-*Ensure `certs/` are available to the agent.*
-
-```bash
-# Connects to localhost hub by default
-./bin/agent
-
-# Or specify remote hub address
-./bin/agent --hub remote-hub-ip:50051
-```
-
-**Option B: Magic Remote Install (Use from Admin Machine)**
-If you are on your laptop (Mac/Linux) and want to deploy to a remote server without logging in manually:
-
-```bash
-chmod +x scripts/remote_install.sh
-./scripts/remote_install.sh
-```
-*Follow the prompts. It will SSH into the server, upload keys, and start the agent.*
-
-### 5. Using the CLI
-
-Manage your fleet using the CLI tool.
-
-```bash
-# List all connected nodes
-./bin/cli nodes ls
-
-# Run a container on a specific node
-./bin/cli run --node <NODE_ID> nginx:latest
-
-# List containers on a specific node
-./bin/cli ps --node <NODE_ID>
-```
+The agent will automatically:
+1.  Install dependencies (Go, etc.)
+2.  Connect to the Hub to fetch secure mTLS certificates.
+3.  Register itself as a node.
+4.  Start as a systemd service (`docklet-agent`).
 
 ---
 
 ## 🖥️ Web Dashboard
 
-The Hub includes a built-in Web Dashboard. Application source code is in `web/dashboard`.
-
-1.  Make sure you built the project (`make build` compiles the frontend).
-2.  Start the Hub.
-3.  Open **http://localhost:1499** in your browser.
+Access the dashboard at **http://<HUB_IP>:1499**
 
 **Default Credentials:**
 *   Username: `astracat`
 *   Password: `astracat`
 
+**Features:**
+*   **Dashboard**: View all connected nodes and their status.
+*   **Container Management**: Start, Stop, Remove, Inspect, and view Logs of containers.
+*   **Quick Launch**: Wizard to easily deploy new containers with port mapping and env vars.
+*   **Terminal**: Execute commands inside containers directly from the browser.
 
 ---
 
-## 🛠 Configuration
+## 🛠 Manual Development Setup
 
-| Environment Variable | Component | Description | Default |
-|----------------------|-----------|-------------|---------|
-| `DATABASE_URL`       | Hub       | Postgres Connection String | `postgres://user:password@localhost:5432/docklet` |
-| `DOCKLET_HUB_ADDR`   | Agent     | Address of the Hub | `localhost:50051` |
+If you want to contribute or build manually:
+
+### Prerequisites
+*   Go 1.24+
+*   Node.js 20+
+*   Docker
+
+### Build
+```bash
+git clone https://github.com/ASTRACAT2022/Docklet.git
+cd Docklet
+
+# Build Binaries
+go build -o bin/hub ./cmd/hub
+go build -o bin/agent ./cmd/agent
+go build -o bin/cli ./cmd/cli
+
+# Build Dashboard
+cd web/dashboard
+npm install
+npm run build
+cd ../..
+```
+
+### Run Locally
+```bash
+# Terminal 1: Run Hub
+./bin/hub
+
+# Terminal 2: Run Agent
+./bin/agent --hub localhost:50051
+```
 
 ---
 
 ## 🔒 Security Details
 
 Docklet enforces **Zero Trust**:
-1.  **Hub** requires a client certificate from Agents and CLI.
-2.  **Agents** verify the Hub's certificate against the CA.
-3.  **CLI** authenticates using its client certificate.
-
-To revoke access, simple revoke the certificate (CRL implementation coming in v1.1).
+1.  **Bootstrap**: Initial connection uses a secure Token to fetch unique mTLS certificates.
+2.  **Communication**: All subsequent communication is encrypted via mTLS.
+3.  **Isolation**: Agents only accept commands from the authenticated Hub.
 
 ---
 

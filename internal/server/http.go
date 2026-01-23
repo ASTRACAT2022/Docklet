@@ -151,7 +151,43 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	// Pattern: {nodeID}/containers
 	if len(path) > 11 && path[len(path)-11:] == "/containers" {
 		nodeID := path[:len(path)-11]
-		s.proxyCommand(w, nodeID, "docker_ps", nil)
+
+		if r.Method == http.MethodGet {
+			s.proxyCommand(w, nodeID, "docker_ps", nil)
+			return
+		}
+
+		if r.Method == http.MethodPost {
+			// Read body as raw JSON to pass it through
+			// But we want to validate it or just pass it?
+			// Let's read it into a map/struct to validate minimal fields, then marshal back or just pass raw bytes.
+			// The agent expects a JSON string in Args[0].
+
+			var body map[string]interface{}
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				http.Error(w, "Invalid JSON", http.StatusBadRequest)
+				return
+			}
+
+			// Validate Image
+			if img, ok := body["image"].(string); !ok || img == "" {
+				http.Error(w, "Image is required", http.StatusBadRequest)
+				return
+			}
+
+			// Marshal back to string
+			jsonBytes, err := json.Marshal(body)
+			if err != nil {
+				http.Error(w, "JSON error", http.StatusInternalServerError)
+				return
+			}
+
+			// Call docker_run with JSON string as first arg
+			s.proxyCommand(w, nodeID, "docker_run", []string{string(jsonBytes)})
+			return
+		}
+
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 

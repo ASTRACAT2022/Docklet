@@ -26,6 +26,15 @@ function App() {
     const [execOut, setExecOut] = useState('')
     const [execError, setExecError] = useState('')
 
+    // Create Container State
+    const [createOpen, setCreateOpen] = useState(false)
+    const [createImage, setCreateImage] = useState('')
+    const [createName, setCreateName] = useState('')
+    const [createPorts, setCreatePorts] = useState([{ host: '', container: '' }])
+    const [createEnv, setCreateEnv] = useState('')
+    const [createLoading, setCreateLoading] = useState(false)
+    const [createError, setCreateError] = useState('')
+
     const handleLogin = (newToken) => {
         localStorage.setItem('docklet_token', newToken)
         setToken(newToken)
@@ -213,6 +222,76 @@ function App() {
         }
     }
 
+    const handleCreateContainer = async () => {
+        if (!selectedNode) return
+        if (!createImage.trim()) {
+            setCreateError('Image is required')
+            return
+        }
+
+        setCreateLoading(true)
+        setCreateError('')
+
+        // Parse Ports
+        const ports = createPorts
+            .filter(p => p.host && p.container)
+            .map(p => ({ host: p.host, container: p.container }))
+
+        // Parse Env
+        const env = createEnv.split('\n').map(l => l.trim()).filter(l => l)
+
+        const payload = {
+            image: createImage.trim(),
+            name: createName.trim(),
+            ports: ports,
+            env: env
+        }
+
+        try {
+            const res = await fetch(`/api/nodes/${selectedNode.node_id}/containers`, {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(payload),
+            })
+
+            if (!res.ok) {
+                const text = await res.text()
+                throw new Error(text || 'Failed to create container')
+            }
+
+            setCreateOpen(false)
+            setCreateImage('')
+            setCreateName('')
+            setCreatePorts([{ host: '', container: '' }])
+            setCreateEnv('')
+            fetchContainers(selectedNode.node_id)
+        } catch (e) {
+            console.error('create error', e)
+            setCreateError(e.message)
+        } finally {
+            setCreateLoading(false)
+        }
+    }
+
+    const addPortRow = () => {
+        setCreatePorts([...createPorts, { host: '', container: '' }])
+    }
+
+    const updatePortRow = (index, field, value) => {
+        const newPorts = [...createPorts]
+        newPorts[index][field] = value
+        setCreatePorts(newPorts)
+    }
+
+    const removePortRow = (index) => {
+        const newPorts = [...createPorts]
+        newPorts.splice(index, 1)
+        setCreatePorts(newPorts)
+    }
+
     useEffect(() => {
         if (token) {
             fetchNodes()
@@ -274,15 +353,27 @@ function App() {
 
                     {/* Containers List */}
                     <div className="col-span-2 bg-white rounded-lg shadow p-6">
-                        <h2 className="text-xl font-semibold mb-2">
-                            {selectedNode ? `Containers on ${selectedNode.node_id.substring(0, 8)}...` : 'Select a node'}
-                        </h2>
+                        <div className="flex justify-between items-center mb-4">
+                            <h2 className="text-xl font-semibold">
+                                {selectedNode ? `Containers on ${selectedNode.node_id.substring(0, 8)}...` : 'Select a node'}
+                            </h2>
+                            {selectedNode && (
+                                <button
+                                    onClick={() => setCreateOpen(true)}
+                                    className="px-4 py-2 bg-green-600 text-white rounded text-sm hover:bg-green-700 shadow-sm"
+                                >
+                                    + Launch Container
+                                </button>
+                            )}
+                        </div>
+                        
                         {selectedNode && (
-                            <div className="flex items-center gap-2 mb-4">
+                            <div className="flex items-center gap-2 mb-4 bg-gray-50 p-2 rounded">
+                                <span className="text-sm text-gray-500">Node Actions:</span>
                                 <input
                                     type="text"
                                     className="flex-1 p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm"
-                                    placeholder="New node name"
+                                    placeholder="Rename node..."
                                     value={renameName}
                                     onChange={(e) => setRenameName(e.target.value)}
                                 />
@@ -430,6 +521,90 @@ function App() {
                                         {execOut}
                                     </pre>
                                 )}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {createOpen && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+                    <div className="bg-white rounded-lg shadow-lg w-full max-w-lg">
+                        <div className="flex items-center justify-between border-b px-4 py-3">
+                            <div className="text-sm font-semibold text-gray-700">Launch Container</div>
+                            <button onClick={() => setCreateOpen(false)} className="text-gray-500 hover:text-gray-700 text-sm">Close</button>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-600 mb-1">Image (required)</label>
+                                <input
+                                    type="text"
+                                    className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="e.g. nginx:latest"
+                                    value={createImage}
+                                    onChange={(e) => setCreateImage(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-600 mb-1">Name (optional)</label>
+                                <input
+                                    type="text"
+                                    className="w-full p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="e.g. my-nginx"
+                                    value={createName}
+                                    onChange={(e) => setCreateName(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-600 mb-1">Ports (Host : Container)</label>
+                                {createPorts.map((p, i) => (
+                                    <div key={i} className="flex gap-2 mb-2">
+                                        <input
+                                            type="text"
+                                            className="w-1/2 p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                            placeholder="8080"
+                                            value={p.host}
+                                            onChange={(e) => updatePortRow(i, 'host', e.target.value)}
+                                        />
+                                        <span className="self-center text-gray-400">:</span>
+                                        <input
+                                            type="text"
+                                            className="w-1/2 p-2 border rounded text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                            placeholder="80"
+                                            value={p.container}
+                                            onChange={(e) => updatePortRow(i, 'container', e.target.value)}
+                                        />
+                                        <button onClick={() => removePortRow(i)} className="text-red-500 hover:text-red-700 px-2">×</button>
+                                    </div>
+                                ))}
+                                <button onClick={addPortRow} className="text-xs text-blue-600 hover:underline">+ Add Port</button>
+                            </div>
+                            <div>
+                                <label className="block text-xs font-semibold text-gray-600 mb-1">Environment Variables (KEY=VALUE per line)</label>
+                                <textarea
+                                    className="w-full p-2 border rounded text-sm font-mono h-24 focus:ring-2 focus:ring-blue-500 outline-none"
+                                    placeholder="FOO=bar"
+                                    value={createEnv}
+                                    onChange={(e) => setCreateEnv(e.target.value)}
+                                />
+                            </div>
+
+                            {createError && <div className="text-red-600 text-sm bg-red-50 p-2 rounded">{createError}</div>}
+
+                            <div className="flex justify-end gap-2 pt-2 border-t mt-4">
+                                <button
+                                    onClick={() => setCreateOpen(false)}
+                                    className="px-4 py-2 border rounded text-sm hover:bg-gray-50"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handleCreateContainer}
+                                    disabled={createLoading || !createImage.trim()}
+                                    className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 flex items-center"
+                                >
+                                    {createLoading && <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
+                                    {createLoading ? 'Deploying...' : 'Deploy'}
+                                </button>
                             </div>
                         </div>
                     </div>

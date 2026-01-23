@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
@@ -289,41 +290,79 @@ func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd
 		if a.DockerCli == nil {
 			errStr = "docker client not initialized"
 			exitCode = 1
-			exitCode = 1
 		} else {
 			if len(cmd.Args) < 1 {
-				errStr = "image name required"
+				errStr = "config json required"
 				exitCode = 1
 			} else {
-				imageName := cmd.Args[0]
+				// Parse Config
+				type RunConfig struct {
+					Image string `json:"image"`
+					Name  string `json:"name"`
+					Ports []struct {
+						Host      string `json:"host"`
+						Container string `json:"container"`
+					} `json:"ports"`
+					Env []string `json:"env"`
+				}
 
-				// 1. Pull Image (Blocking for now, simple)
-				reader, err := a.DockerCli.ImagePull(context.Background(), imageName, image.PullOptions{})
-				if err != nil {
-					errStr = "pull error: " + err.Error()
+				var config RunConfig
+				if err := json.Unmarshal([]byte(cmd.Args[0]), &config); err != nil {
+					// Fallback to old behavior: Args[0] is just image name
+					config.Image = cmd.Args[0]
+				}
+
+				if config.Image == "" {
+					errStr = "image name required"
 					exitCode = 1
 				} else {
-					io.Copy(io.Discard, reader) // Drain body to finish pull
-					reader.Close()
-
-					// 2. Create Container
-					resp, err := a.DockerCli.ContainerCreate(context.Background(), &container.Config{
-						Image: imageName,
-					}, nil, nil, nil, "")
-
+					// 1. Pull Image
+					reader, err := a.DockerCli.ImagePull(context.Background(), config.Image, image.PullOptions{})
 					if err != nil {
-						errStr = "create error: " + err.Error()
+						errStr = "pull error: " + err.Error()
 						exitCode = 1
 					} else {
-						// 3. Start Container
-						if err := a.DockerCli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
-							errStr = "start error: " + err.Error()
+						io.Copy(io.Discard, reader)
+						reader.Close()
+
+						// Prepare Config
+						containerConfig := &container.Config{
+							Image: config.Image,
+							Env:   config.Env,
+						}
+
+						// Prepare Host Config (Ports)
+						hostConfig := &container.HostConfig{
+							PortBindings: nat.PortMap{},
+						}
+
+						for _, p := range config.Ports {
+							// Assuming TCP for now.
+							// Container port needs to be "80/tcp"
+							portKey := nat.Port(p.Container + "/tcp")
+							hostConfig.PortBindings[portKey] = []nat.PortBinding{
+								{
+									HostIP:   "0.0.0.0",
+									HostPort: p.Host,
+								},
+							}
+						}
+
+						// 2. Create Container
+						resp, err := a.DockerCli.ContainerCreate(context.Background(), containerConfig, hostConfig, nil, nil, config.Name)
+
+						if err != nil {
+							errStr = "create error: " + err.Error()
 							exitCode = 1
-							// ... docker_run implementation ...
 						} else {
-							// Success
-							output = []byte(resp.ID)
-							exitCode = 0
+							// 3. Start Container
+							if err := a.DockerCli.ContainerStart(context.Background(), resp.ID, container.StartOptions{}); err != nil {
+								errStr = "start error: " + err.Error()
+								exitCode = 1
+							} else {
+								output = []byte(resp.ID)
+								exitCode = 0
+							}
 						}
 					}
 				}
