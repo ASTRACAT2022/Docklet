@@ -46,6 +46,17 @@ if [ "$(uname)" = "Linux" ]; then
         $SUDO yum install -y git make curl jq tar
     fi
 
+    if [ "$MODE" = "node" ]; then
+        echo -e "${GREEN}Checking Docker (required for Agent)...${NC}"
+        if ! command -v docker &> /dev/null; then
+            echo -e "${CYAN}Docker not found. Installing Docker Engine...${NC}"
+            curl -fsSL https://get.docker.com | $SUDO sh
+        fi
+        if command -v systemctl &> /dev/null; then
+            $SUDO systemctl enable --now docker 2>/dev/null || $SUDO systemctl enable --now docker.service 2>/dev/null || true
+        fi
+    fi
+
     # Install Go 1.25+
     NEED_GO=true
     if command -v go &> /dev/null; then
