@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package docklet.v1;
+
+option go_package = "github.com/astracat/docklet/api/proto/v1;dockletv1";
+
+service DockletService {
+  // Agent initiates a stream to the Hub.
+  // This is a persistent bidirectional stream.
+  rpc RegisterStream(stream StreamPayload) returns (stream StreamPayload);
+  
+  // Admin API
+  rpc ListNodes(ListNodesRequest) returns (ListNodesResponse);
+  rpc ExecuteCommand(ExecuteCommandRequest) returns (ExecuteCommandResponse);
+}
+
+message ListNodesRequest {}
+
+message ListNodesResponse {
+  repeated NodeInfo nodes = 1;
+}
+
+message ExecuteCommandRequest {
+  string node_id = 1;
+  string command = 2; // e.g. "docker_ps"
+  repeated string args = 3;
+}
+
+message ExecuteCommandResponse {
+  bytes output = 1;
+  string error = 2;
+  int32 exit_code = 3;
+}
+
+message NodeInfo {
+  string node_id = 1;
+  string machine_id = 2;
+  string version = 3;
+  string status = 4; // "connected", "disconnected"
+  string remote_addr = 5;
+}
+
+message StreamPayload {
+  // Oneof for different types of messages (commands, responses, heartbeats)
+  oneof payload {
+    Handshake handshake = 1;
+    Command command = 2;
+    CommandResult result = 3;
+    Heartbeat heartbeat = 4;
+  }
+}
+
+message Handshake {
+  string node_id = 1;
+  string machine_id = 2;
+  string version = 3;
+  // potentially auth token here
+}
+
+message Command {
+  string id = 1;
+  string type = 2; // e.g., "docker_ps", "docker_run"
+  repeated string args = 3; 
+}
+
+message CommandResult {
+  string command_id = 1;
+  int32 exit_code = 2;
+  bytes output = 3;
+  string error = 4;
+}
+
+message Heartbeat {
+  int64 timestamp = 1;
+}
