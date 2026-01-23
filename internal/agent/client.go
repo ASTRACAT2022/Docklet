@@ -10,12 +10,124 @@ import (
 	"log"
 	"os"
 
+	pb "github.com/astracat/docklet/api/proto/v1"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/client"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
-// ... (Agent struct and NewAgent)
+type Agent struct {
+	HubAddr   string
+	NodeID    string
+	DockerCli *client.Client
+	CACert    string
+	CertFile  string
+	KeyFile   string
+}
+
+func NewAgent(hubAddr string, nodeID string, caCert, certFile, keyFile string) *Agent {
+	// Init Docker Client
+	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err != nil {
+		log.Printf("Warning: Failed to create Docker client: %v", err)
+		// We continue, might fail later when executing commands
+	}
+
+	return &Agent{
+		HubAddr:   hubAddr,
+		NodeID:    nodeID,
+		DockerCli: cli,
+		CACert:    caCert,
+		CertFile:  certFile,
+		KeyFile:   keyFile,
+	}
+}
+
+func (a *Agent) Start() error {
+	var opts []grpc.DialOption
+
+	if a.CACert != "" {
+		creds, err := loadTLSCreds(a.CACert, a.CertFile, a.KeyFile)
+		if err != nil {
+			return fmt.Errorf("failed to load TLS creds: %w", err)
+		}
+		opts = append(opts, grpc.WithTransportCredentials(creds))
+		log.Println("Secure mode (mTLS) ENABLED")
+	} else {
+		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		log.Println("WARNING: Secure mode DISABLED")
+	}
+
+	// Connect to Hub
+	conn, err := grpc.NewClient(a.HubAddr, opts...)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	client := pb.NewDockletServiceClient(conn)
+
+	// Establish stream
+	stream, err := client.RegisterStream(context.Background())
+	if err != nil {
+		return err
+	}
+
+	// Send Handshake
+	err = stream.Send(&pb.StreamPayload{
+		Payload: &pb.StreamPayload_Handshake{
+			Handshake: &pb.Handshake{
+				NodeId:    a.NodeID,
+				MachineId: "test-machine-id", // Implement real one later
+				Version:   "0.1.0",
+			},
+		},
+	})
+	if err != nil {
+		log.Printf("Failed to send handshake: %v", err)
+		return err
+	}
+
+	log.Println("Connected to Hub. Waiting for commands...")
+
+	// Listen loop
+	waitc := make(chan struct{})
+	go func() {
+		for {
+			in, err := stream.Recv()
+			if err == io.EOF {
+				close(waitc)
+				return
+			}
+			if err != nil {
+				log.Printf("Failed to receive a note : %v", err)
+				close(waitc)
+				return
+			}
+
+			// Handle incoming messages
+			switch payload := in.Payload.(type) {
+			case *pb.StreamPayload_Heartbeat:
+				log.Printf("Received Heartbeat from Hub: %d", payload.Heartbeat.Timestamp)
+			case *pb.StreamPayload_Command:
+				cmd := payload.Command
+				log.Printf("Received Command: %s (ID: %s)", cmd.Type, cmd.Id)
+
+				// Execute Command
+				go a.handleCommand(stream, cmd)
+
+			default:
+				log.Printf("Received unknown from Hub")
+			}
+		}
+	}()
+
+	<-waitc
+	return nil
+}
 
 func (a *Agent) handleCommand(stream pb.DockletService_RegisterStreamClient, cmd *pb.Command) {
 	var output []byte
