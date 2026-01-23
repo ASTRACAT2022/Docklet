@@ -133,21 +133,10 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	// For now, let's just match exact suffixes for the user's specific request
 
 	// Action: Start
+	// Action: Start
 	if len(path) > 6 && path[len(path)-6:] == "/start" {
 		// .../containers/<CID>/start
 		// Strip /start
-		base := path[:len(path)-6]
-		// Strip prefix up to containers/
-		// Actually this parsing is getting messy. Let's rely on standard Go ServeMux in HandleFunc if we could,
-		// but we are in a sub-handler.
-
-		// Let's split "path"
-		// path = NODEID/containers/CONTAINERID/start
-
-		// Find "containers/"
-		// ...
-
-		// Let's cheat a little and use a helper
 	}
 
 	s.handleContainerActionDynamic(w, r, path)
