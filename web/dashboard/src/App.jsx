@@ -29,6 +29,7 @@ function App() {
     const [execError, setExecError] = useState('')
     const [nodeSearch, setNodeSearch] = useState('')
     const [containerSearch, setContainerSearch] = useState('')
+    const [mobileView, setMobileView] = useState('nodes')
 
     // Create Container State
     const [createOpen, setCreateOpen] = useState(false)
@@ -543,6 +544,18 @@ function App() {
         return 'Unknown node'
     }
 
+    const getContainerPrimaryName = (container) => {
+        if (!container || !Array.isArray(container.Names) || container.Names.length === 0) return ''
+        return String(container.Names[0] || '').replace(/^\//, '')
+    }
+
+    const selectNode = (node) => {
+        setSelectedNode(node)
+        if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
+            setMobileView('containers')
+        }
+    }
+
     const nodeQuery = nodeSearch.trim().toLowerCase()
     const filteredNodes = nodes.filter((node) => {
         if (!nodeQuery) return true
@@ -607,6 +620,12 @@ function App() {
         setContainerSearch('')
     }, [selectedNode?.node_id, selectedNode?.name])
 
+    useEffect(() => {
+        if (!selectedNode) {
+            setMobileView('nodes')
+        }
+    }, [selectedNode])
+
     if (!token) {
         return <Login onLogin={handleLogin} />
     }
@@ -629,8 +648,32 @@ function App() {
                     </div>
                 </div>
 
+                <div className="mb-4 grid grid-cols-2 gap-2 lg:hidden">
+                    <button
+                        onClick={() => setMobileView('nodes')}
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors ${
+                            mobileView === 'nodes'
+                                ? 'border-orange-500 bg-orange-500/15 text-orange-200'
+                                : 'border-slate-700 bg-slate-900 text-slate-300'
+                        }`}
+                    >
+                        Nodes ({filteredNodes.length})
+                    </button>
+                    <button
+                        onClick={() => setMobileView('containers')}
+                        disabled={!selectedNode}
+                        className={`rounded-lg border px-3 py-2 text-sm font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+                            mobileView === 'containers'
+                                ? 'border-orange-500 bg-orange-500/15 text-orange-200'
+                                : 'border-slate-700 bg-slate-900 text-slate-300'
+                        }`}
+                    >
+                        Containers ({filteredContainers.length})
+                    </button>
+                </div>
+
                 <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
-                    <div className="lg:col-span-1 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur">
+                    <div className={`${mobileView === 'containers' ? 'hidden lg:block' : ''} lg:col-span-1 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur`}>
                         <div className="mb-4 flex items-center justify-between">
                             <div>
                                 <h2 className="text-lg font-semibold text-slate-200">Nodes</h2>
@@ -675,7 +718,7 @@ function App() {
                             {filteredNodes.map((node) => (
                                 <button
                                     key={node.node_id}
-                                    onClick={() => setSelectedNode(node)}
+                                    onClick={() => selectNode(node)}
                                     className={`w-full rounded-xl border p-3 text-left transition-all ${
                                         selectedNode?.node_id === node.node_id
                                             ? 'border-orange-500 bg-orange-500/10 shadow-lg shadow-orange-900/30'
@@ -707,27 +750,35 @@ function App() {
                         </div>
                     </div>
 
-                    <div className="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur">
+                    <div className={`${mobileView === 'nodes' ? 'hidden lg:block' : ''} lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur`}>
                         <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
-                            <div>
-                                <h2 className="text-xl font-semibold text-slate-100">
-                                    {selectedNode ? `Containers on ${getNodeDisplayName(selectedNode)}` : 'Select a node'}
-                                </h2>
-                                {selectedNode && (
-                                    <p className="text-xs text-slate-500">{selectedNode.remote_addr}</p>
-                                )}
+                            <div className="flex items-start gap-2">
+                                <button
+                                    onClick={() => setMobileView('nodes')}
+                                    className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-800 lg:hidden"
+                                >
+                                    Nodes
+                                </button>
+                                <div>
+                                    <h2 className="text-xl font-semibold text-slate-100">
+                                        {selectedNode ? `Containers on ${getNodeDisplayName(selectedNode)}` : 'Select a node'}
+                                    </h2>
+                                    {selectedNode && (
+                                        <p className="text-xs text-slate-500">{selectedNode.remote_addr}</p>
+                                    )}
+                                </div>
                             </div>
                             {selectedNode && (
-                                <div className="flex flex-wrap gap-2">
+                                <div className="flex w-full flex-wrap gap-2 sm:w-auto">
                                     <button
                                         onClick={() => setStacksOpen(true)}
-                                        className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500"
+                                        className="flex-1 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500 sm:flex-none"
                                     >
                                         Stacks (Compose)
                                     </button>
                                     <button
                                         onClick={() => setCreateOpen(true)}
-                                        className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500"
+                                        className="flex-1 rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500 sm:flex-none"
                                     >
                                         Launch
                                     </button>
@@ -782,8 +833,47 @@ function App() {
                         )}
 
                         {selectedNode && !loading && (
-                            <div className="overflow-x-auto rounded-xl border border-slate-800">
-                                <table className="min-w-full divide-y divide-slate-800">
+                            <>
+                                <div className="space-y-3 md:hidden">
+                                    {filteredContainers.map((c) => (
+                                        <div key={c.Id} className="rounded-xl border border-slate-800 bg-slate-950/80 p-3">
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="min-w-0">
+                                                    <p className="font-mono text-xs text-orange-400">{c.Id.substring(0, 12)}</p>
+                                                    <p className="mt-1 truncate text-sm font-semibold text-slate-100">
+                                                        {getContainerPrimaryName(c) || c.Image}
+                                                    </p>
+                                                    <p className="truncate text-xs text-slate-400">{c.Image}</p>
+                                                </div>
+                                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase ${
+                                                    c.State === 'running'
+                                                        ? 'border-emerald-700 bg-emerald-500/15 text-emerald-300'
+                                                        : 'border-slate-700 bg-slate-800 text-slate-400'
+                                                }`}>
+                                                    {c.State || 'unknown'}
+                                                </span>
+                                            </div>
+                                            <p className="mt-2 text-xs text-slate-400">{c.Status}</p>
+                                            <div className="mt-3 grid grid-cols-2 gap-2">
+                                                <button onClick={() => startContainer(selectedNode.node_id, c.Id)} className="rounded-md border border-emerald-800/70 bg-emerald-500/10 px-2 py-2 text-xs font-semibold text-emerald-300">Start</button>
+                                                <button onClick={() => stopContainer(selectedNode.node_id, c.Id)} className="rounded-md border border-amber-800/70 bg-amber-500/10 px-2 py-2 text-xs font-semibold text-amber-300">Stop</button>
+                                                <button onClick={() => removeContainer(selectedNode.node_id, c.Id)} className="rounded-md border border-rose-800/70 bg-rose-500/10 px-2 py-2 text-xs font-semibold text-rose-300">Delete</button>
+                                                <button onClick={() => fetchLogs(selectedNode.node_id, c)} className="rounded-md border border-orange-800/70 bg-orange-500/10 px-2 py-2 text-xs font-semibold text-orange-200">Logs</button>
+                                                <button onClick={() => enableAutoRestart(selectedNode.node_id, c.Id)} className="rounded-md border border-orange-800/70 bg-orange-500/10 px-2 py-2 text-xs font-semibold text-orange-300">Auto On</button>
+                                                <button onClick={() => disableAutoRestart(selectedNode.node_id, c.Id)} className="rounded-md border border-slate-700 bg-slate-800 px-2 py-2 text-xs font-semibold text-slate-300">Auto Off</button>
+                                                <button onClick={() => openDetails(selectedNode.node_id, c)} className="col-span-2 rounded-md border border-slate-700 bg-slate-800 px-2 py-2 text-xs font-semibold text-slate-200">Details</button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                    {filteredContainers.length === 0 && (
+                                        <div className="rounded-xl border border-slate-800 bg-slate-950/80 px-4 py-8 text-center text-sm text-slate-500">
+                                            {containerSearch.trim() ? 'Контейнеры по запросу не найдены' : 'No containers running'}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="hidden overflow-x-auto rounded-xl border border-slate-800 md:block">
+                                    <table className="min-w-full divide-y divide-slate-800">
                                     <thead className="bg-slate-950">
                                         <tr>
                                             <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">ID</th>
@@ -829,8 +919,9 @@ function App() {
                                             </tr>
                                         )}
                                     </tbody>
-                                </table>
-                            </div>
+                                    </table>
+                                </div>
+                            </>
                         )}
                     </div>
                 </div>
@@ -848,9 +939,9 @@ function App() {
                 }}
             />
             {logsOpen && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-4xl max-h-[80vh] flex flex-col">
-                        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="flex max-h-[92dvh] w-full max-w-4xl flex-col rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl sm:max-h-[80vh]">
+                        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 sm:px-6 sm:py-4">
                             <div className="text-base font-semibold text-zinc-200">
                                 Logs: <span className="font-mono text-orange-400">{logsContainer ? logsContainer.Id.substring(0, 12) : ''}</span>
                             </div>
@@ -866,7 +957,7 @@ function App() {
                                 <div className="p-6 text-red-500">{logsError}</div>
                             )}
                             {!logsLoading && !logsError && (
-                                <pre className="text-xs font-mono text-zinc-300 p-6 overflow-auto h-full whitespace-pre-wrap">
+                                <pre className="h-full overflow-auto whitespace-pre-wrap p-4 font-mono text-xs text-zinc-300 sm:p-6">
                                     {logsText || 'No logs available'}
                                 </pre>
                             )}
@@ -875,9 +966,9 @@ function App() {
                 </div>
             )}
             {stacksOpen && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-4xl max-h-[90vh] flex flex-col">
-                        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="flex max-h-[92dvh] w-full max-w-4xl flex-col rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl sm:max-h-[90vh]">
+                        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 sm:px-6 sm:py-4">
                             <div className="text-base font-semibold text-zinc-200">Deploy Stack</div>
                             <button onClick={() => setStacksOpen(false)} className="text-zinc-500 hover:text-zinc-300">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -885,7 +976,7 @@ function App() {
                                 </svg>
                             </button>
                         </div>
-                        <div className="p-6 flex-1 overflow-auto space-y-4">
+                        <div className="flex-1 space-y-4 overflow-auto p-4 sm:p-6">
                             <div>
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Stack Name</label>
                                 <input
@@ -908,7 +999,7 @@ function App() {
                             </div>
                             {stackError && <div className="text-red-400 text-sm bg-red-900/20 p-3 rounded border border-red-900/50">{stackError}</div>}
                         </div>
-                        <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/50">
+                        <div className="flex justify-end gap-3 border-t border-zinc-800 bg-zinc-900/50 px-4 py-3 sm:px-6 sm:py-4">
                             <button
                                 onClick={() => setStacksOpen(false)}
                                 className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 text-sm transition-colors"
@@ -932,9 +1023,9 @@ function App() {
                 </div>
             )}
             {clusterOpen && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-6xl max-h-[90vh] flex flex-col">
-                        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl sm:max-h-[90vh]">
+                        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 sm:px-6 sm:py-4">
                             <div className="text-base font-semibold text-zinc-200">Deploy Cluster (Multi-Node Compose)</div>
                             <button onClick={() => setClusterOpen(false)} className="text-zinc-500 hover:text-zinc-300">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -943,7 +1034,7 @@ function App() {
                             </button>
                         </div>
 
-                        <div className="p-6 flex-1 overflow-auto grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        <div className="grid flex-1 grid-cols-1 gap-6 overflow-auto p-4 lg:grid-cols-3 sm:p-6">
                             <div className="bg-zinc-950/30 border border-zinc-800 rounded-lg p-4">
                                 <div className="mb-4">
                                     <div className="text-xs font-semibold text-zinc-400 mb-2 uppercase tracking-wider">Existing Clusters</div>
@@ -1122,7 +1213,7 @@ function App() {
                             </div>
                         </div>
 
-                        <div className="flex justify-end gap-3 px-6 py-4 border-t border-zinc-800 bg-zinc-900/50">
+                        <div className="flex justify-end gap-3 border-t border-zinc-800 bg-zinc-900/50 px-4 py-3 sm:px-6 sm:py-4">
                             <button
                                 onClick={() => setClusterOpen(false)}
                                 className="px-4 py-2 bg-zinc-800 text-zinc-300 rounded hover:bg-zinc-700 text-sm transition-colors"
@@ -1146,8 +1237,8 @@ function App() {
                 </div>
             )}
             {detailsOpen && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-6xl max-h-[90vh] flex flex-col">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="flex max-h-[92dvh] w-full max-w-6xl flex-col rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl sm:max-h-[90vh]">
                         <div className="flex items-center justify-between border-b px-4 py-3">
                             <div className="text-base font-semibold text-zinc-200">
                                 Container: <span className="font-mono text-orange-400">{detailsContainer.Id.substring(0, 12)}</span>
@@ -1158,11 +1249,11 @@ function App() {
                                 </svg>
                             </button>
                         </div>
-                        <div className="p-6 flex-1 overflow-auto bg-zinc-950/30">
+                        <div className="flex-1 overflow-auto bg-zinc-950/30 p-4 sm:p-6">
                             {detailsLoading && <div className="text-zinc-500">Loading details...</div>}
                             
                             {!detailsLoading && (
-                                <div className="grid grid-cols-2 gap-6">
+                                <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
                                     {/* Stats */}
                                     <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg shadow-sm">
                                         <h3 className="text-sm font-semibold text-zinc-300 mb-3 flex items-center gap-2">
@@ -1171,7 +1262,7 @@ function App() {
                                             </svg>
                                             Live Stats
                                         </h3>
-                                        <div className="grid grid-cols-2 gap-4">
+                                        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                                             <div className="bg-zinc-950 p-3 rounded border border-zinc-800">
                                                 <div className="text-xs text-zinc-500 uppercase">CPU Usage</div>
                                                 <div className="text-xl font-mono text-zinc-200">{statsText ? JSON.parse(statsText).cpu : '0%'}</div>
@@ -1191,7 +1282,7 @@ function App() {
                                             </svg>
                                             Execute Command
                                         </h3>
-                                        <div className="flex gap-2 mb-2">
+                                        <div className="mb-2 flex flex-col gap-2 sm:flex-row">
                                             <input
                                                 type="text"
                                                 className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-orange-500"
@@ -1215,7 +1306,7 @@ function App() {
                                     </div>
 
                                     {/* Inspect JSON */}
-                                    <div className="col-span-2 bg-zinc-900 border border-zinc-800 p-4 rounded-lg shadow-sm">
+                                    <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg shadow-sm lg:col-span-2">
                                         <h3 className="text-sm font-semibold text-zinc-300 mb-3">Inspect Details</h3>
                                         <div className="bg-zinc-950 p-4 rounded border border-zinc-800 h-64 overflow-auto">
                                             <pre className="text-xs font-mono text-zinc-400 whitespace-pre-wrap">
@@ -1230,13 +1321,13 @@ function App() {
                 </div>
             )}
             {createOpen && (
-                <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
-                    <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-lg">
-                        <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+                    <div className="flex max-h-[92dvh] w-full max-w-lg flex-col rounded-lg border border-zinc-800 bg-zinc-900 shadow-2xl">
+                        <div className="flex items-center justify-between border-b border-zinc-800 px-4 py-3 sm:px-6 sm:py-4">
                             <div className="text-base font-semibold text-zinc-200">Launch Container</div>
                             <button onClick={() => setCreateOpen(false)} className="text-zinc-500 hover:text-zinc-300">Close</button>
                         </div>
-                        <div className="p-6 space-y-4">
+                        <div className="space-y-4 overflow-auto p-4 sm:p-6">
                             <div>
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Image (required)</label>
                                 <input

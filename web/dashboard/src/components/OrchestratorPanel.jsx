@@ -296,8 +296,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
-      <Card className="w-full max-w-7xl border-zinc-700 bg-zinc-950">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+      <Card className="flex max-h-[92dvh] w-full max-w-7xl flex-col border-zinc-700 bg-zinc-950 sm:max-h-[90vh]">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <div>
             <CardTitle className="text-zinc-100">Orchestrator Mode</CardTitle>
@@ -308,7 +308,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
           <Button variant="outline" onClick={onClose}>Close</Button>
         </CardHeader>
 
-        <CardContent className="grid grid-cols-1 gap-4 lg:grid-cols-4">
+        <CardContent className="grid flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-4">
           <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold text-zinc-200">Target Nodes</h4>
