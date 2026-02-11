@@ -3,10 +3,14 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -75,6 +79,14 @@ func (s *HTTPServer) Start(addr string) error {
 	// Protected Routes (manually wrapped middleware)
 	mux.HandleFunc("/api/nodes", s.authMiddleware(s.handleListNodes))
 	mux.HandleFunc("/api/nodes/", s.authMiddleware(s.handleNodeAction))
+	mux.HandleFunc("/api/portliner/endpoints", s.authMiddleware(s.handlePortlinerEndpoints))
+	mux.HandleFunc("/api/portliner/endpoints/", s.authMiddleware(s.handlePortlinerEndpointAction))
+	mux.HandleFunc("/api/portliner/v1/endpoints", s.authMiddleware(s.handlePortlinerEndpoints))
+	mux.HandleFunc("/api/portliner/v1/endpoints/", s.authMiddleware(s.handlePortlinerEndpointAction))
+	mux.HandleFunc("/api/portainer/endpoints", s.authMiddleware(s.handlePortlinerEndpoints))
+	mux.HandleFunc("/api/portainer/endpoints/", s.authMiddleware(s.handlePortlinerEndpointAction))
+	mux.HandleFunc("/api/portainer/v1/endpoints", s.authMiddleware(s.handlePortlinerEndpoints))
+	mux.HandleFunc("/api/portainer/v1/endpoints/", s.authMiddleware(s.handlePortlinerEndpointAction))
 	mux.HandleFunc("/api/clusters/deploy", s.authMiddleware(s.handleClusterDeploy))
 	mux.HandleFunc("/api/clusters", s.authMiddleware(s.handleClusters))
 	mux.HandleFunc("/api/clusters/", s.authMiddleware(s.handleClusterAction))
@@ -705,6 +717,362 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	s.handleContainerActionDynamic(w, r, path)
 }
 
+type portlinerEndpoint struct {
+	ID     string `json:"Id"`
+	Name   string `json:"Name"`
+	URL    string `json:"URL"`
+	Type   int    `json:"Type"`
+	Status int    `json:"Status"`
+	TLS    bool   `json:"TLS"`
+}
+
+func (s *HTTPServer) handlePortlinerEndpoints(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	dbNodes, err := s.grpcServer.listNodesWithCleanup(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	sort.Slice(dbNodes, func(i, j int) bool { return dbNodes[i].ID < dbNodes[j].ID })
+	endpoints := make([]portlinerEndpoint, 0, len(dbNodes))
+	for _, n := range dbNodes {
+		name := strings.TrimSpace(n.Name)
+		if name == "" {
+			name = n.ID
+		}
+		statusVal := 0
+		if s.grpcServer.nodeConnected(n.ID) {
+			statusVal = 1
+		}
+		endpoints = append(endpoints, portlinerEndpoint{
+			ID:     n.ID,
+			Name:   name,
+			URL:    n.RemoteAddr,
+			Type:   1,
+			Status: statusVal,
+			TLS:    true,
+		})
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(endpoints)
+}
+
+func (s *HTTPServer) handlePortlinerEndpointAction(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+
+	rest := ""
+	prefixes := []string{
+		"/api/portliner/endpoints/",
+		"/api/portliner/v1/endpoints/",
+		"/api/portainer/endpoints/",
+		"/api/portainer/v1/endpoints/",
+	}
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(r.URL.Path, prefix) {
+			rest = strings.TrimPrefix(r.URL.Path, prefix)
+			break
+		}
+	}
+	if strings.TrimSpace(rest) == "" {
+		http.NotFound(w, r)
+		return
+	}
+
+	parts := strings.SplitN(rest, "/", 2)
+	endpointID := strings.TrimSpace(parts[0])
+	tail := ""
+	if len(parts) == 2 {
+		tail = strings.Trim(parts[1], "/")
+	}
+
+	nodeID, err := s.resolvePortlinerNodeID(r.Context(), endpointID)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+
+	if tail == "" {
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		node, err := s.grpcServer.Repo.GetNode(r.Context(), nodeID)
+		if err != nil || node == nil {
+			http.Error(w, "endpoint not found", http.StatusNotFound)
+			return
+		}
+		name := strings.TrimSpace(node.Name)
+		if name == "" {
+			name = node.ID
+		}
+		statusVal := 0
+		if s.grpcServer.nodeConnected(node.ID) {
+			statusVal = 1
+		}
+		_ = json.NewEncoder(w).Encode(portlinerEndpoint{
+			ID:     node.ID,
+			Name:   name,
+			URL:    node.RemoteAddr,
+			Type:   1,
+			Status: statusVal,
+			TLS:    true,
+		})
+		return
+	}
+
+	if strings.HasPrefix(tail, "docker/") {
+		tail = strings.TrimPrefix(tail, "docker/")
+	}
+
+	// Portainer-like container endpoints:
+	// GET    /endpoints/{id}/docker/containers/json
+	// GET    /endpoints/{id}/docker/containers/{cid}/json
+	// GET    /endpoints/{id}/docker/containers/{cid}/logs
+	// POST   /endpoints/{id}/docker/containers/{cid}/start
+	// POST   /endpoints/{id}/docker/containers/{cid}/stop
+	// POST   /endpoints/{id}/docker/containers/{cid}/restart
+	// DELETE /endpoints/{id}/docker/containers/{cid}
+	// POST   /endpoints/{id}/docker/containers/create
+	if tail == "containers/json" && r.Method == http.MethodGet {
+		resp, err := s.executeNodeCommand(r.Context(), nodeID, "docker_ps", nil, 20*time.Second)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if json.Valid(resp.Output) {
+			w.Write(resp.Output)
+			return
+		}
+		_ = json.NewEncoder(w).Encode([]interface{}{})
+		return
+	}
+
+	if tail == "containers/create" && r.Method == http.MethodPost {
+		s.handlePortlinerContainerCreate(w, r, nodeID)
+		return
+	}
+
+	if !strings.HasPrefix(tail, "containers/") {
+		http.NotFound(w, r)
+		return
+	}
+
+	sub := strings.TrimPrefix(tail, "containers/")
+	p := strings.Split(sub, "/")
+	if len(p) == 0 || strings.TrimSpace(p[0]) == "" {
+		http.NotFound(w, r)
+		return
+	}
+	containerID := p[0]
+	action := ""
+	if len(p) > 1 {
+		action = p[1]
+	}
+
+	switch r.Method {
+	case http.MethodDelete:
+		if action != "" {
+			http.Error(w, "Invalid container path", http.StatusBadRequest)
+			return
+		}
+		if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_rm", []string{containerID}, 20*time.Second); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+		return
+	case http.MethodGet:
+		switch action {
+		case "json":
+			resp, err := s.executeNodeCommand(r.Context(), nodeID, "docker_inspect", []string{containerID}, 20*time.Second)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if json.Valid(resp.Output) {
+				w.Write(resp.Output)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"output": string(resp.Output)})
+			return
+		case "logs":
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			resp, err := s.executeNodeCommand(r.Context(), nodeID, "docker_logs", []string{containerID}, 20*time.Second)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_, _ = w.Write(resp.Output)
+			return
+		}
+	case http.MethodPost:
+		switch action {
+		case "start":
+			if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_start", []string{containerID}, 20*time.Second); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+		case "stop":
+			if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_stop", []string{containerID}, 25*time.Second); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+		case "restart":
+			if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_stop", []string{containerID}, 25*time.Second); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_start", []string{containerID}, 20*time.Second); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+			return
+		case "update":
+			type updateContainerRequest struct {
+				RestartPolicy struct {
+					Name string `json:"Name"`
+				} `json:"RestartPolicy"`
+			}
+			var req updateContainerRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				http.Error(w, "Invalid request", http.StatusBadRequest)
+				return
+			}
+			policy := strings.TrimSpace(req.RestartPolicy.Name)
+			if policy == "" {
+				http.Error(w, "RestartPolicy.Name is required", http.StatusBadRequest)
+				return
+			}
+			if _, err := s.executeNodeCommand(r.Context(), nodeID, "docker_update_restart", []string{containerID, policy}, 20*time.Second); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]string{"Warnings": ""})
+			return
+		}
+	}
+
+	http.NotFound(w, r)
+}
+
+func (s *HTTPServer) handlePortlinerContainerCreate(w http.ResponseWriter, r *http.Request, nodeID string) {
+	type hostPortBinding struct {
+		HostPort string `json:"HostPort"`
+	}
+	type createRequest struct {
+		Image      string   `json:"Image"`
+		Name       string   `json:"Name"`
+		Env        []string `json:"Env"`
+		HostConfig struct {
+			PortBindings  map[string][]hostPortBinding `json:"PortBindings"`
+			RestartPolicy struct {
+				Name string `json:"Name"`
+			} `json:"RestartPolicy"`
+		} `json:"HostConfig"`
+	}
+
+	var req createRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+
+	image := strings.TrimSpace(req.Image)
+	if image == "" {
+		http.Error(w, "Image is required", http.StatusBadRequest)
+		return
+	}
+
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		name = strings.TrimSpace(req.Name)
+	}
+
+	ports := make([]map[string]string, 0)
+	for containerPortWithProto, hostBindings := range req.HostConfig.PortBindings {
+		containerPort := strings.TrimSpace(strings.Split(containerPortWithProto, "/")[0])
+		for _, hb := range hostBindings {
+			hostPort := strings.TrimSpace(hb.HostPort)
+			if hostPort == "" || containerPort == "" {
+				continue
+			}
+			ports = append(ports, map[string]string{
+				"host":      hostPort,
+				"container": containerPort,
+			})
+		}
+	}
+
+	payload := map[string]interface{}{
+		"image": image,
+		"name":  name,
+		"env":   req.Env,
+		"ports": ports,
+	}
+	restartPolicy := strings.TrimSpace(req.HostConfig.RestartPolicy.Name)
+	if restartPolicy != "" {
+		payload["restart_policy"] = restartPolicy
+	}
+
+	jsonPayload, err := json.Marshal(payload)
+	if err != nil {
+		http.Error(w, "Failed to encode payload", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := s.executeNodeCommand(r.Context(), nodeID, "docker_run", []string{string(jsonPayload)}, 40*time.Second)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	type createResponse struct {
+		ID       string   `json:"Id"`
+		Warnings []string `json:"Warnings"`
+	}
+	_ = json.NewEncoder(w).Encode(createResponse{
+		ID:       strings.TrimSpace(string(resp.Output)),
+		Warnings: []string{},
+	})
+}
+
+func (s *HTTPServer) resolvePortlinerNodeID(ctx context.Context, endpointID string) (string, error) {
+	endpointID = strings.TrimSpace(endpointID)
+	if endpointID == "" {
+		return "", fmt.Errorf("endpoint id is required")
+	}
+
+	nodes, err := s.grpcServer.listNodesWithCleanup(ctx)
+	if err != nil {
+		return "", err
+	}
+	for _, n := range nodes {
+		if n.ID == endpointID {
+			return n.ID, nil
+		}
+	}
+
+	if idx, err := strconv.Atoi(endpointID); err == nil {
+		sort.Slice(nodes, func(i, j int) bool { return nodes[i].ID < nodes[j].ID })
+		if idx >= 1 && idx <= len(nodes) {
+			return nodes[idx-1].ID, nil
+		}
+	}
+
+	return "", fmt.Errorf("endpoint %s not found", endpointID)
+}
+
 func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http.Request, path string) {
 	// path is everything after /api/nodes/
 	// Format: NODEID/containers/CONTAINERID/ACTION
@@ -817,26 +1185,37 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 }
 
 func (s *HTTPServer) proxyCommand(w http.ResponseWriter, nodeID, cmd string, args []string) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second) // Increased timeout for stop
-	defer cancel()
-
-	resp, err := s.grpcServer.ExecuteCommand(ctx, &pb.ExecuteCommandRequest{
-		NodeId:  nodeID,
-		Command: cmd,
-		Args:    args,
-	})
-
+	resp, err := s.executeNodeCommand(context.Background(), nodeID, cmd, args, 15*time.Second)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-
-	if resp.ExitCode != 0 {
-		http.Error(w, resp.Error, http.StatusInternalServerError)
-		return
-	}
-
 	w.Write(resp.Output)
+}
+
+func (s *HTTPServer) executeNodeCommand(ctx context.Context, nodeID, cmd string, args []string, timeout time.Duration) (*pb.ExecuteCommandResponse, error) {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
+	cctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	resp, err := s.grpcServer.ExecuteCommand(cctx, &pb.ExecuteCommandRequest{
+		NodeId:  nodeID,
+		Command: cmd,
+		Args:    args,
+	})
+	if err != nil {
+		return nil, err
+	}
+	if resp.ExitCode != 0 {
+		msg := strings.TrimSpace(resp.Error)
+		if msg == "" {
+			msg = fmt.Sprintf("command %s failed", cmd)
+		}
+		return nil, errors.New(msg)
+	}
+	return resp, nil
 }
 
 func (s *HTTPServer) handleBootstrapCerts(w http.ResponseWriter, r *http.Request) {
