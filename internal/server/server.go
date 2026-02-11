@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -42,6 +43,8 @@ type DockletServer struct {
 	pendingCommands sync.Map
 }
 
+const inactiveNodeTTL = 10 * time.Minute
+
 func NewDockletServer(repo storage.NodeRepository) *DockletServer {
 	return &DockletServer{
 		Repo: repo,
@@ -53,24 +56,22 @@ func (s *DockletServer) ListNodes(ctx context.Context, req *pb.ListNodesRequest)
 		Nodes: []*pb.NodeInfo{},
 	}
 
-	// 1. Get all nodes from DB
-	dbNodes, err := s.Repo.ListNodes(ctx)
+	dbNodes, err := s.listNodesWithCleanup(ctx)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to fetch nodes from db: %v", err)
 	}
 
 	for _, n := range dbNodes {
-		status := "disconnected"
-		// Check if currently connected in memory
-		if _, ok := s.agents.Load(n.ID); ok {
-			status = "connected"
+		nodeStatus := "disconnected"
+		if s.nodeConnected(n.ID) {
+			nodeStatus = "connected"
 		}
 
 		resp.Nodes = append(resp.Nodes, &pb.NodeInfo{
 			NodeId:     n.ID,
 			MachineId:  n.MachineID,
 			Version:    n.Version,
-			Status:     status,
+			Status:     nodeStatus,
 			RemoteAddr: n.RemoteAddr,
 		})
 	}
@@ -79,6 +80,57 @@ func (s *DockletServer) ListNodes(ctx context.Context, req *pb.ListNodesRequest)
 	// Actually Upsert should handle this, so skipping for now.
 
 	return resp, nil
+}
+
+func (s *DockletServer) RenameNode(ctx context.Context, nodeID, name string) error {
+	nodeID = strings.TrimSpace(nodeID)
+	name = strings.TrimSpace(name)
+	if nodeID == "" {
+		return status.Error(codes.InvalidArgument, "node id is required")
+	}
+	if name == "" {
+		return status.Error(codes.InvalidArgument, "name is required")
+	}
+
+	node, err := s.Repo.GetNode(ctx, nodeID)
+	if err != nil {
+		return status.Errorf(codes.Internal, "failed to get node: %v", err)
+	}
+	if node == nil {
+		return status.Errorf(codes.NotFound, "node %s not found", nodeID)
+	}
+
+	if err := s.Repo.RenameNode(ctx, nodeID, name); err != nil {
+		return status.Errorf(codes.Internal, "failed to rename node: %v", err)
+	}
+	return nil
+}
+
+func (s *DockletServer) listNodesWithCleanup(ctx context.Context) ([]*storage.Node, error) {
+	dbNodes, err := s.Repo.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	cutoff := time.Now().Add(-inactiveNodeTTL)
+	nodes := make([]*storage.Node, 0, len(dbNodes))
+	for _, n := range dbNodes {
+		if !s.nodeConnected(n.ID) && !n.LastSeen.IsZero() && n.LastSeen.Before(cutoff) {
+			if err := s.Repo.DeleteNode(ctx, n.ID); err != nil {
+				log.Printf("Failed to cleanup stale node %s: %v", n.ID, err)
+				nodes = append(nodes, n)
+			}
+			continue
+		}
+		nodes = append(nodes, n)
+	}
+
+	return nodes, nil
+}
+
+func (s *DockletServer) nodeConnected(nodeID string) bool {
+	_, ok := s.agents.Load(nodeID)
+	return ok
 }
 
 func (s *DockletServer) ExecuteCommand(ctx context.Context, req *pb.ExecuteCommandRequest) (*pb.ExecuteCommandResponse, error) {
@@ -182,10 +234,22 @@ func (s *DockletServer) RegisterStream(stream pb.DockletService_RegisterStreamSe
 			if cur.(*AgentSession) == session {
 				s.agents.Delete(nodeID)
 				log.Printf("Agent disconnected: %s", nodeID)
-				return
 			}
+		} else {
+			log.Printf("Agent stream ended: %s", nodeID)
 		}
-		log.Printf("Agent stream ended: %s", nodeID)
+
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := s.Repo.UpsertNode(ctx, &storage.Node{
+			ID:         nodeID,
+			MachineID:  session.MachineID,
+			Version:    session.Version,
+			RemoteAddr: session.RemoteAddr,
+			LastSeen:   time.Now(),
+		}); err != nil {
+			log.Printf("Failed to persist disconnect timestamp for %s: %v", nodeID, err)
+		}
 	}()
 
 	// Send Ack/Heartbeat immediately to confirm connection
@@ -229,8 +293,13 @@ func (s *DockletServer) RegisterStream(stream pb.DockletService_RegisterStreamSe
 			}
 
 		case *pb.StreamPayload_Heartbeat:
-			// log.Printf("[%s] Heartbeat", nodeID)
-			// Keep-alive logic can go here
+			_ = s.Repo.UpsertNode(context.Background(), &storage.Node{
+				ID:         nodeID,
+				MachineID:  session.MachineID,
+				Version:    session.Version,
+				RemoteAddr: session.RemoteAddr,
+				LastSeen:   time.Now(),
+			})
 
 		default:
 			log.Printf("[%s] Unknown payload type: %T", nodeID, payload)

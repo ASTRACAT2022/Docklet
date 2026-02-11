@@ -28,32 +28,33 @@ function Login({ onLogin }) {
     }
 
     return (
-        <div className="min-h-screen bg-gray-100 flex items-center justify-center">
-            <div className="bg-white p-8 rounded shadow-md w-full max-w-sm">
-                <h2 className="text-2xl font-bold mb-6 text-center text-gray-800">Docklet Login</h2>
+        <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center px-4">
+            <div className="w-full max-w-sm rounded-2xl border border-slate-800 bg-slate-900/90 p-8 shadow-2xl backdrop-blur">
+                <h2 className="mb-1 text-center text-2xl font-bold text-white">Docklet Login</h2>
+                <p className="mb-6 text-center text-xs text-slate-500">Control panel access</p>
 
                 {error && (
-                    <div className="bg-red-100 text-red-700 p-3 rounded mb-4 text-sm">
+                    <div className="mb-4 rounded-lg border border-rose-800/60 bg-rose-500/10 p-3 text-sm text-rose-300">
                         {error}
                     </div>
                 )}
 
                 <form onSubmit={handleSubmit}>
                     <div className="mb-4">
-                        <label className="block text-gray-700 text-sm font-bold mb-2">Username</label>
+                        <label className="mb-2 block text-sm font-semibold text-slate-300">Username</label>
                         <input
                             type="text"
-                            className="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2.5 text-slate-200 focus:border-orange-500 focus:outline-none"
                             value={username}
                             onChange={(e) => setUsername(e.target.value)}
                         />
                     </div>
 
                     <div className="mb-6">
-                        <label className="block text-gray-700 text-sm font-bold mb-2">Password</label>
+                        <label className="mb-2 block text-sm font-semibold text-slate-300">Password</label>
                         <input
                             type="password"
-                            className="w-full p-2 border rounded focus:outline-none focus:ring-2 focus:ring-blue-500"
+                            className="w-full rounded-lg border border-slate-700 bg-slate-950 p-2.5 text-slate-200 focus:border-orange-500 focus:outline-none"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                         />
@@ -61,13 +62,13 @@ function Login({ onLogin }) {
 
                     <button
                         type="submit"
-                        className="w-full bg-blue-600 text-white py-2 px-4 rounded hover:bg-blue-700 font-bold"
+                        className="w-full rounded-lg bg-orange-600 px-4 py-2.5 font-bold text-white transition-colors hover:bg-orange-500"
                     >
                         Sign In
                     </button>
                 </form>
 
-                <p className="mt-4 text-xs text-gray-500 text-center">
+                <p className="mt-4 text-center text-xs text-slate-500">
                     Default: astracat / astracat
                 </p>
             </div>

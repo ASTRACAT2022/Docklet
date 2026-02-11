@@ -2,6 +2,7 @@ package storage
 
 import (
 	"context"
+	"strings"
 	"sync"
 )
 
@@ -35,4 +36,19 @@ func (s *MemoryStore) GetNode(ctx context.Context, id string) (*Node, error) {
 		return val.(*Node), nil
 	}
 	return nil, nil // Not found
+}
+
+func (s *MemoryStore) RenameNode(ctx context.Context, id, name string) error {
+	name = strings.TrimSpace(name)
+	if val, ok := s.nodes.Load(id); ok {
+		node := val.(*Node)
+		node.Name = name
+		s.nodes.Store(id, node)
+	}
+	return nil
+}
+
+func (s *MemoryStore) DeleteNode(ctx context.Context, id string) error {
+	s.nodes.Delete(id)
+	return nil
 }

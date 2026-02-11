@@ -13,6 +13,8 @@ import (
 
 	pb "github.com/astracat/docklet/api/proto/v1"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type HTTPServer struct {
@@ -45,9 +47,9 @@ type RestartPolicyRequest struct {
 
 const (
 	// Default credentials if not set via env
-	defaultUser  = "astracat"
-	defaultPass  = "astracat"
-	validToken   = "simple-token-astracat-123" // In real app, generate UUIDs
+	defaultUser = "astracat"
+	defaultPass = "astracat"
+	validToken  = "simple-token-astracat-123" // In real app, generate UUIDs
 )
 
 func NewHTTPServer(grpcServer *DockletServer, staticPath string) *HTTPServer {
@@ -160,7 +162,7 @@ func (s *HTTPServer) handleClusterDeploy(w http.ResponseWriter, r *http.Request)
 	}
 
 	type ClusterDeployRequest struct {
-		Name      string   `json:"name"`
+		Name    string   `json:"name"`
 		Content string   `json:"content"`
 		Nodes   []string `json:"nodes"`
 		ID      string   `json:"id"`
@@ -496,13 +498,40 @@ func (s *HTTPServer) authMiddleware(next http.HandlerFunc) http.HandlerFunc {
 func (s *HTTPServer) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	resp, err := s.grpcServer.ListNodes(context.Background(), &pb.ListNodesRequest{})
+	dbNodes, err := s.grpcServer.listNodesWithCleanup(context.Background())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
-	json.NewEncoder(w).Encode(resp)
+	type NodeResponse struct {
+		NodeID     string `json:"node_id"`
+		Name       string `json:"name,omitempty"`
+		MachineID  string `json:"machine_id"`
+		Version    string `json:"version"`
+		Status     string `json:"status"`
+		RemoteAddr string `json:"remote_addr"`
+		LastSeen   int64  `json:"last_seen"`
+	}
+
+	nodes := make([]NodeResponse, 0, len(dbNodes))
+	for _, n := range dbNodes {
+		nodeStatus := "disconnected"
+		if s.grpcServer.nodeConnected(n.ID) {
+			nodeStatus = "connected"
+		}
+		nodes = append(nodes, NodeResponse{
+			NodeID:     n.ID,
+			Name:       n.Name,
+			MachineID:  n.MachineID,
+			Version:    n.Version,
+			Status:     nodeStatus,
+			RemoteAddr: n.RemoteAddr,
+			LastSeen:   n.LastSeen.Unix(),
+		})
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{"nodes": nodes})
 }
 
 func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
@@ -534,7 +563,23 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		s.proxyCommand(w, nodeID, "node_rename", []string{name})
+		if err := s.grpcServer.RenameNode(r.Context(), nodeID, name); err != nil {
+			if st, ok := status.FromError(err); ok {
+				switch st.Code() {
+				case codes.NotFound:
+					http.Error(w, st.Message(), http.StatusNotFound)
+				case codes.InvalidArgument:
+					http.Error(w, st.Message(), http.StatusBadRequest)
+				default:
+					http.Error(w, st.Message(), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]bool{"ok": true})
 		return
 	}
 
@@ -546,7 +591,7 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 			s.proxyCommand(w, nodeID, "stack_ls", nil)
 			return
 		}
-		
+
 		if r.Method == http.MethodPost {
 			// Create/Update stack
 			type StackRequest struct {
@@ -568,7 +613,7 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	
+
 	// Pattern: {nodeID}/stacks/{stackName}
 	// Detect /stacks/
 	const stacksMarker = "/stacks/"
@@ -583,7 +628,7 @@ func (s *HTTPServer) handleNodeAction(w http.ResponseWriter, r *http.Request) {
 	if stacksIdx != -1 {
 		nodeID := path[:stacksIdx]
 		rest := path[stacksIdx+len(stacksMarker):]
-		
+
 		// rest = stackName or stackName/action?
 		// Assume DELETE for down
 		if r.Method == http.MethodDelete {

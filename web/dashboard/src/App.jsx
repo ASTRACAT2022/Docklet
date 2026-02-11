@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import Login from './Login'
+import OrchestratorPanel from './components/OrchestratorPanel'
 
 function App() {
     const [nodes, setNodes] = useState([])
@@ -21,10 +22,13 @@ function App() {
     const [statsLoading, setStatsLoading] = useState(false)
     const [statsText, setStatsText] = useState('')
     const [statsError, setStatsError] = useState('')
+    const detailsLoading = inspectLoading || statsLoading
     const [execCmd, setExecCmd] = useState('sh -lc "echo hello"')
     const [execLoading, setExecLoading] = useState(false)
     const [execOut, setExecOut] = useState('')
     const [execError, setExecError] = useState('')
+    const [nodeSearch, setNodeSearch] = useState('')
+    const [containerSearch, setContainerSearch] = useState('')
 
     // Create Container State
     const [createOpen, setCreateOpen] = useState(false)
@@ -57,6 +61,7 @@ function App() {
     const [clustersError, setClustersError] = useState('')
     const [clusterRenameId, setClusterRenameId] = useState(null)
     const [clusterRenameValue, setClusterRenameValue] = useState('')
+    const [orchestratorOpen, setOrchestratorOpen] = useState(false)
 
     const handleLogin = (newToken) => {
         localStorage.setItem('docklet_token', newToken)
@@ -530,6 +535,46 @@ function App() {
         setCreatePorts(newPorts)
     }
 
+    const getNodeDisplayName = (node) => {
+        if (!node) return 'Unknown node'
+        const alias = (node.name || '').trim()
+        if (alias) return alias
+        if (node.node_id) return `${node.node_id.substring(0, 8)}...`
+        return 'Unknown node'
+    }
+
+    const nodeQuery = nodeSearch.trim().toLowerCase()
+    const filteredNodes = nodes.filter((node) => {
+        if (!nodeQuery) return true
+        return [
+            node.name,
+            node.node_id,
+            node.remote_addr,
+            node.version,
+        ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase()
+            .includes(nodeQuery)
+    })
+
+    const containerQuery = containerSearch.trim().toLowerCase()
+    const filteredContainers = containers.filter((container) => {
+        if (!containerQuery) return true
+        const containerNames = Array.isArray(container.Names) ? container.Names.join(' ') : ''
+        return [
+            container.Id,
+            container.Image,
+            container.Status,
+            container.State,
+            containerNames,
+        ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase()
+            .includes(containerQuery)
+    })
+
     useEffect(() => {
         if (token) {
             fetchNodes()
@@ -544,171 +589,243 @@ function App() {
         }
     }, [selectedNode])
 
+    useEffect(() => {
+        if (!selectedNode) return
+        const updatedNode = nodes.find((node) => node.node_id === selectedNode.node_id)
+        if (!updatedNode) {
+            setSelectedNode(null)
+            setContainers([])
+            return
+        }
+        if (updatedNode !== selectedNode) {
+            setSelectedNode(updatedNode)
+        }
+    }, [nodes, selectedNode])
+
+    useEffect(() => {
+        setRenameName(selectedNode?.name || '')
+        setContainerSearch('')
+    }, [selectedNode?.node_id, selectedNode?.name])
+
     if (!token) {
         return <Login onLogin={handleLogin} />
     }
 
     return (
-        <div className="min-h-screen bg-zinc-950 text-gray-100 p-8">
-            <div className="max-w-7xl mx-auto">
-                <div className="flex justify-between items-center mb-8 border-b border-zinc-800 pb-4">
-                    <h1 className="text-3xl font-bold text-white tracking-tight">Docklet <span className="text-blue-500">Pro</span></h1>
-                    <button onClick={handleLogout} className="text-sm text-red-400 hover:text-red-300 font-semibold transition-colors">
-                        Logout
-                    </button>
+        <div className="min-h-screen bg-slate-950 text-slate-100">
+            <div className="mx-auto max-w-7xl px-4 py-6 sm:px-6 lg:px-8">
+                <div className="mb-6 rounded-2xl border border-slate-700/60 bg-gradient-to-r from-slate-900 via-slate-900 to-orange-950/40 p-5 shadow-xl">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                        <div>
+                            <h1 className="text-3xl font-bold tracking-tight text-white">Docklet Control Panel</h1>
+                            <p className="mt-1 text-sm text-slate-400">Управление нодами и контейнерами в одном окне</p>
+                        </div>
+                        <button
+                            onClick={handleLogout}
+                            className="rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-sm font-semibold text-rose-300 transition-colors hover:bg-rose-500/20"
+                        >
+                            Logout
+                        </button>
+                    </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
-                    {/* Nodes List */}
-                    <div className="col-span-1 bg-zinc-900 rounded-lg shadow-xl border border-zinc-800 p-6 h-fit">
-                        <div className="flex items-center justify-between mb-4">
-                            <h2 className="text-xl font-semibold text-zinc-300">Nodes</h2>
-                            <button
-                                onClick={() => {
-                                    setClusterOpen(true)
-                                    setClusterError('')
-                                    setClusterResults([])
-                                    setClusterNodeIds([])
-                                    setClustersError('')
-                                    fetchClusters()
-                                }}
-                                disabled={nodes.length === 0}
-                                className="px-3 py-1.5 bg-purple-600 text-white rounded text-xs hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium"
-                            >
-                                Cluster
-                            </button>
+                <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+                    <div className="lg:col-span-1 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur">
+                        <div className="mb-4 flex items-center justify-between">
+                            <div>
+                                <h2 className="text-lg font-semibold text-slate-200">Nodes</h2>
+                                <p className="text-xs text-slate-500">{filteredNodes.length} из {nodes.length}</p>
+                            </div>
+                            <div className="flex gap-2">
+                                <button
+                                    onClick={() => setOrchestratorOpen(true)}
+                                    disabled={nodes.length === 0}
+                                    className="rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Orchestrator
+                                </button>
+                                <button
+                                    onClick={() => {
+                                        setClusterOpen(true)
+                                        setClusterError('')
+                                        setClusterResults([])
+                                        setClusterNodeIds([])
+                                        setClustersError('')
+                                        fetchClusters()
+                                    }}
+                                    disabled={nodes.length === 0}
+                                    className="rounded-lg bg-orange-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-orange-500 disabled:cursor-not-allowed disabled:opacity-50"
+                                >
+                                    Cluster
+                                </button>
+                            </div>
                         </div>
-                        <div className="space-y-3">
-                            {nodes.map(node => (
-                                <div
+
+                        <div className="mb-4">
+                            <input
+                                type="text"
+                                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-orange-500 focus:outline-none"
+                                placeholder="Поиск: имя, ID, IP"
+                                value={nodeSearch}
+                                onChange={(e) => setNodeSearch(e.target.value)}
+                            />
+                        </div>
+
+                        <div className="max-h-[64vh] space-y-3 overflow-auto pr-1">
+                            {filteredNodes.map((node) => (
+                                <button
                                     key={node.node_id}
                                     onClick={() => setSelectedNode(node)}
-                                    className={`p-4 rounded-lg border cursor-pointer transition-all ${selectedNode?.node_id === node.node_id
-                                        ? 'border-blue-500 bg-blue-900/20 shadow-md'
-                                        : 'border-zinc-700 bg-zinc-800/50 hover:bg-zinc-800 hover:border-zinc-600'
-                                        }`}
+                                    className={`w-full rounded-xl border p-3 text-left transition-all ${
+                                        selectedNode?.node_id === node.node_id
+                                            ? 'border-orange-500 bg-orange-500/10 shadow-lg shadow-orange-900/30'
+                                            : 'border-slate-700 bg-slate-800/70 hover:border-slate-500 hover:bg-slate-800'
+                                    }`}
                                 >
-                                    <div className="flex justify-between items-center mb-2">
-                                        <span className="font-mono text-sm font-bold text-blue-400">{node.node_id.substring(0, 8)}...</span>
-                                        <span className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-full ${node.status === 'connected' ? 'bg-green-900/30 text-green-400 border border-green-900' : 'bg-red-900/30 text-red-400 border border-red-900'
-                                            }`}>
+                                    <div className="mb-1 flex items-center justify-between gap-2">
+                                        <span className="truncate text-sm font-semibold text-slate-200">{getNodeDisplayName(node)}</span>
+                                        <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                            node.status === 'connected'
+                                                ? 'border border-emerald-700 bg-emerald-500/15 text-emerald-300'
+                                                : 'border border-rose-700 bg-rose-500/15 text-rose-300'
+                                        }`}>
                                             {node.status}
                                         </span>
                                     </div>
-                                    <div className="text-xs text-zinc-500">
-                                        <p>IP: {node.remote_addr}</p>
-                                        <p>Ver: {node.version}</p>
+                                    <div className="text-xs text-slate-500">
+                                        <p className="truncate">ID: {node.node_id}</p>
+                                        <p className="truncate">IP: {node.remote_addr}</p>
                                     </div>
-                                </div>
+                                </button>
                             ))}
-                            {nodes.length === 0 && <p className="text-zinc-500 text-center py-4">No nodes connected</p>}
+
+                            {filteredNodes.length === 0 && (
+                                <p className="py-6 text-center text-sm text-slate-500">
+                                    {nodeSearch.trim() ? 'Поиск не дал результатов' : 'Нет подключённых нод'}
+                                </p>
+                            )}
                         </div>
                     </div>
 
-                    {/* Containers List */}
-                    <div className="col-span-3 bg-zinc-900 rounded-lg shadow-xl border border-zinc-800 p-6 min-h-[500px]">
-                        <div className="flex justify-between items-center mb-6">
-                            <h2 className="text-xl font-semibold text-zinc-300">
-                                {selectedNode ? `Containers on ${selectedNode.node_id.substring(0, 8)}...` : 'Select a node'}
-                            </h2>
+                    <div className="lg:col-span-3 rounded-2xl border border-slate-800 bg-slate-900/80 p-5 shadow-xl backdrop-blur">
+                        <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+                            <div>
+                                <h2 className="text-xl font-semibold text-slate-100">
+                                    {selectedNode ? `Containers on ${getNodeDisplayName(selectedNode)}` : 'Select a node'}
+                                </h2>
+                                {selectedNode && (
+                                    <p className="text-xs text-slate-500">{selectedNode.remote_addr}</p>
+                                )}
+                            </div>
                             {selectedNode && (
-                                <div className="flex gap-2">
+                                <div className="flex flex-wrap gap-2">
                                     <button
                                         onClick={() => setStacksOpen(true)}
-                                        className="px-4 py-2 bg-purple-600 text-white rounded-md text-sm hover:bg-purple-700 shadow-lg shadow-purple-900/20 transition-all font-medium flex items-center gap-2"
+                                        className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" />
-                                        </svg>
                                         Stacks (Compose)
                                     </button>
                                     <button
                                         onClick={() => setCreateOpen(true)}
-                                        className="px-4 py-2 bg-blue-600 text-white rounded-md text-sm hover:bg-blue-700 shadow-lg shadow-blue-900/20 transition-all font-medium flex items-center gap-2"
+                                        className="rounded-lg bg-orange-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-orange-500"
                                     >
-                                        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4">
-                                            <path strokeLinecap="round" strokeLinejoin="round" d="M12 4.5v15m7.5-7.5h-15" />
-                                        </svg>
                                         Launch
                                     </button>
                                 </div>
                             )}
                         </div>
-                        
+
                         {selectedNode && (
-                            <div className="flex items-center gap-2 mb-6 bg-zinc-950/50 p-3 rounded-lg border border-zinc-800">
-                                <span className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Node Alias:</span>
-                                <input
-                                    type="text"
-                                    className="flex-1 p-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
-                                    placeholder="Rename node..."
-                                    value={renameName}
-                                    onChange={(e) => setRenameName(e.target.value)}
-                                />
-                                <button
-                                    onClick={renameNode}
-                                    disabled={!renameName.trim()}
-                                    className="px-3 py-1.5 text-xs bg-zinc-800 text-zinc-300 border border-zinc-700 rounded hover:bg-zinc-700 disabled:opacity-50 transition-colors"
-                                >
-                                    Save
-                                </button>
+                            <div className="mb-5 grid gap-3 rounded-xl border border-slate-800 bg-slate-950/50 p-3 md:grid-cols-5">
+                                <div className="md:col-span-3">
+                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Node Alias</label>
+                                    <input
+                                        type="text"
+                                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 focus:border-orange-500 focus:outline-none"
+                                        placeholder="Введите понятное имя ноды"
+                                        value={renameName}
+                                        onChange={(e) => setRenameName(e.target.value)}
+                                    />
+                                </div>
+                                <div className="md:col-span-1 md:self-end">
+                                    <button
+                                        onClick={renameNode}
+                                        disabled={!renameName.trim()}
+                                        className="w-full rounded-lg border border-slate-700 bg-slate-800 px-3 py-2 text-sm text-slate-200 transition-colors hover:bg-slate-700 disabled:opacity-50"
+                                    >
+                                        Save Alias
+                                    </button>
+                                </div>
+                                <div className="md:col-span-1">
+                                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-500">Search Containers</label>
+                                    <input
+                                        type="text"
+                                        className="w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-500 focus:border-orange-500 focus:outline-none"
+                                        placeholder="ID, image, name"
+                                        value={containerSearch}
+                                        onChange={(e) => setContainerSearch(e.target.value)}
+                                    />
+                                </div>
                             </div>
                         )}
 
                         {!selectedNode && (
-                            <div className="flex flex-col items-center justify-center h-64 text-zinc-600">
-                                <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="w-16 h-16 mb-4 opacity-50">
-                                    <path strokeLinecap="round" strokeLinejoin="round" d="M5.25 14.25h13.5m-13.5 0a3 3 0 01-3-3m3 3a3 3 0 100 6h13.5a3 3 0 100-6m-16.5-3a3 3 0 013-3h13.5a3 3 0 013 3m-19.5 0a4.5 4.5 0 01.9-2.25L5.25 10.5m13.5-3l2.25-2.25" />
-                                </svg>
-                                <p>Select a node from the left to manage containers</p>
+                            <div className="flex h-64 flex-col items-center justify-center text-slate-500">
+                                <p>Выберите ноду слева, чтобы управлять контейнерами</p>
                             </div>
                         )}
 
                         {selectedNode && loading && (
-                            <div className="flex items-center justify-center h-64">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                            <div className="flex h-64 items-center justify-center">
+                                <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-orange-500"></div>
                             </div>
                         )}
 
                         {selectedNode && !loading && (
-                            <div className="overflow-x-auto rounded-lg border border-zinc-800">
-                                <table className="min-w-full divide-y divide-zinc-800">
-                                    <thead className="bg-zinc-950">
+                            <div className="overflow-x-auto rounded-xl border border-slate-800">
+                                <table className="min-w-full divide-y divide-slate-800">
+                                    <thead className="bg-slate-950">
                                         <tr>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">ID</th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">Image</th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">Status</th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">Names</th>
-                                            <th className="px-6 py-3 text-left text-xs font-medium text-zinc-500 uppercase tracking-wider">Actions</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">ID</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Image</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Names</th>
+                                            <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Actions</th>
                                         </tr>
                                     </thead>
-                                    <tbody className="bg-zinc-900 divide-y divide-zinc-800">
-                                        {containers.map((c) => (
-                                            <tr key={c.Id} className="hover:bg-zinc-800/50 transition-colors">
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-mono text-zinc-400">{c.Id.substring(0, 12)}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-zinc-300 font-medium">{c.Image}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm">
-                                                    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                                                        c.State === 'running' ? 'bg-green-900/30 text-green-400 border border-green-900' : 'bg-zinc-800 text-zinc-400 border border-zinc-700'
+                                    <tbody className="divide-y divide-slate-800 bg-slate-900">
+                                        {filteredContainers.map((c) => (
+                                            <tr key={c.Id} className="transition-colors hover:bg-slate-800/60">
+                                                <td className="whitespace-nowrap px-4 py-3 font-mono text-sm text-slate-400">{c.Id.substring(0, 12)}</td>
+                                                <td className="whitespace-nowrap px-4 py-3 text-sm font-medium text-slate-200">{c.Image}</td>
+                                                <td className="whitespace-nowrap px-4 py-3 text-sm">
+                                                    <span className={`inline-flex rounded-full border px-2.5 py-0.5 text-xs font-medium ${
+                                                        c.State === 'running'
+                                                            ? 'border-emerald-700 bg-emerald-500/15 text-emerald-300'
+                                                            : 'border-slate-700 bg-slate-800 text-slate-400'
                                                     }`}>
                                                         {c.Status}
                                                     </span>
                                                 </td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm text-zinc-400">{c.Names.join(", ")}</td>
-                                                <td className="px-6 py-4 whitespace-nowrap text-sm font-medium">
-                                                    <button onClick={() => startContainer(selectedNode.node_id, c.Id)} className="mr-3 text-green-500 hover:text-green-400 transition-colors">Start</button>
-                                                    <button onClick={() => stopContainer(selectedNode.node_id, c.Id)} className="mr-3 text-yellow-500 hover:text-yellow-400 transition-colors">Stop</button>
-                                                    <button onClick={() => removeContainer(selectedNode.node_id, c.Id)} className="mr-3 text-red-500 hover:text-red-400 transition-colors">Delete</button>
-                                                    <button onClick={() => enableAutoRestart(selectedNode.node_id, c.Id)} className="mr-3 text-purple-400 hover:text-purple-300 transition-colors">AutoRestart On</button>
-                                                    <button onClick={() => disableAutoRestart(selectedNode.node_id, c.Id)} className="mr-3 text-zinc-400 hover:text-zinc-200 transition-colors">Off</button>
-                                                    <button onClick={() => fetchLogs(selectedNode.node_id, c)} className="mr-3 text-blue-500 hover:text-blue-400 transition-colors">Logs</button>
-                                                    <button onClick={() => openDetails(selectedNode.node_id, c)} className="text-zinc-400 hover:text-zinc-200 transition-colors">Details</button>
+                                                <td className="whitespace-nowrap px-4 py-3 text-sm text-slate-400">{Array.isArray(c.Names) ? c.Names.join(', ') : ''}</td>
+                                                <td className="whitespace-nowrap px-4 py-3 text-sm font-medium">
+                                                    <div className="flex flex-wrap gap-x-3 gap-y-1">
+                                                        <button onClick={() => startContainer(selectedNode.node_id, c.Id)} className="text-emerald-400 transition-colors hover:text-emerald-300">Start</button>
+                                                        <button onClick={() => stopContainer(selectedNode.node_id, c.Id)} className="text-amber-400 transition-colors hover:text-amber-300">Stop</button>
+                                                        <button onClick={() => removeContainer(selectedNode.node_id, c.Id)} className="text-rose-400 transition-colors hover:text-rose-300">Delete</button>
+                                                        <button onClick={() => enableAutoRestart(selectedNode.node_id, c.Id)} className="text-orange-300 transition-colors hover:text-orange-200">AutoRestart On</button>
+                                                        <button onClick={() => disableAutoRestart(selectedNode.node_id, c.Id)} className="text-slate-300 transition-colors hover:text-white">Off</button>
+                                                        <button onClick={() => fetchLogs(selectedNode.node_id, c)} className="text-orange-400 transition-colors hover:text-orange-300">Logs</button>
+                                                        <button onClick={() => openDetails(selectedNode.node_id, c)} className="text-slate-300 transition-colors hover:text-white">Details</button>
+                                                    </div>
                                                 </td>
                                             </tr>
                                         ))}
-                                        {containers.length === 0 && (
+                                        {filteredContainers.length === 0 && (
                                             <tr>
-                                                <td colSpan="5" className="px-6 py-12 text-center text-zinc-500">No containers running</td>
+                                                <td colSpan="5" className="px-6 py-12 text-center text-slate-500">
+                                                    {containerSearch.trim() ? 'Контейнеры по запросу не найдены' : 'No containers running'}
+                                                </td>
                                             </tr>
                                         )}
                                     </tbody>
@@ -718,12 +835,24 @@ function App() {
                     </div>
                 </div>
             </div>
+            <OrchestratorPanel
+                open={orchestratorOpen}
+                onClose={() => setOrchestratorOpen(false)}
+                token={token}
+                nodes={nodes}
+                onRefresh={() => {
+                    fetchNodes()
+                    if (selectedNode) {
+                        fetchContainers(selectedNode.node_id)
+                    }
+                }}
+            />
             {logsOpen && (
                 <div className="fixed inset-0 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
                     <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-4xl max-h-[80vh] flex flex-col">
                         <div className="flex items-center justify-between border-b border-zinc-800 px-6 py-4">
                             <div className="text-base font-semibold text-zinc-200">
-                                Logs: <span className="font-mono text-blue-400">{logsContainer ? logsContainer.Id.substring(0, 12) : ''}</span>
+                                Logs: <span className="font-mono text-orange-400">{logsContainer ? logsContainer.Id.substring(0, 12) : ''}</span>
                             </div>
                             <button onClick={() => setLogsOpen(false)} className="text-zinc-500 hover:text-zinc-300">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -761,7 +890,7 @@ function App() {
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Stack Name</label>
                                 <input
                                     type="text"
-                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-purple-500 transition-colors"
+                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                     placeholder="my-stack"
                                     value={stackName}
                                     onChange={(e) => setStackName(e.target.value)}
@@ -770,7 +899,7 @@ function App() {
                             <div className="flex-1 flex flex-col h-full min-h-[300px]">
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Docker Compose (YAML)</label>
                                 <textarea
-                                    className="flex-1 w-full p-4 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-purple-500 transition-colors resize-none leading-relaxed"
+                                    className="flex-1 w-full p-4 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-orange-500 transition-colors resize-none leading-relaxed"
                                     placeholder={`version: '3'\nservices:\n  web:\n    image: nginx`}
                                     value={stackContent}
                                     onChange={(e) => setStackContent(e.target.value)}
@@ -789,7 +918,7 @@ function App() {
                             <button
                                 onClick={deployStack}
                                 disabled={stackLoading || !stackName.trim() || !stackContent.trim()}
-                                className="px-6 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium flex items-center"
+                                className="px-6 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-orange-900/20 transition-all font-medium flex items-center"
                             >
                                 {stackLoading ? (
                                     <>
@@ -867,13 +996,13 @@ function App() {
                                                         <div className="mt-3 flex gap-2">
                                                             <input
                                                                 type="text"
-                                                                className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-purple-500 transition-colors"
+                                                                className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                                                 value={clusterRenameValue}
                                                                 onChange={(e) => setClusterRenameValue(e.target.value)}
                                                             />
                                                             <button
                                                                 onClick={saveRenameCluster}
-                                                                className="px-3 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
+                                                                className="px-3 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700"
                                                             >
                                                                 Save
                                                             </button>
@@ -918,13 +1047,13 @@ function App() {
                                         >
                                             <input
                                                 type="checkbox"
-                                                className="accent-purple-500"
+                                                className="accent-orange-500"
                                                 checked={clusterNodeIds.includes(n.node_id)}
                                                 onChange={() => toggleClusterNode(n.node_id)}
                                             />
                                             <div className="flex-1 min-w-0">
                                                 <div className="flex items-center justify-between">
-                                                    <div className="font-mono text-xs text-blue-400 truncate">{n.node_id}</div>
+                                                    <div className="text-xs text-orange-300 truncate">{getNodeDisplayName(n)}</div>
                                                     <span className={`px-2 py-0.5 text-[10px] uppercase font-bold rounded-full ${
                                                         n.status === 'connected'
                                                             ? 'bg-green-900/30 text-green-400 border border-green-900'
@@ -933,6 +1062,7 @@ function App() {
                                                         {n.status}
                                                     </span>
                                                 </div>
+                                                <div className="font-mono text-[11px] text-zinc-600 truncate">{n.node_id}</div>
                                                 <div className="text-[11px] text-zinc-500 truncate">{n.remote_addr}</div>
                                             </div>
                                         </label>
@@ -946,7 +1076,7 @@ function App() {
                                     <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Stack Name</label>
                                     <input
                                         type="text"
-                                        className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-purple-500 transition-colors"
+                                        className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                         placeholder="my-cluster-stack"
                                         value={clusterName}
                                         onChange={(e) => setClusterName(e.target.value)}
@@ -955,7 +1085,7 @@ function App() {
                                 <div className="flex-1 flex flex-col min-h-[280px]">
                                     <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Docker Compose (YAML)</label>
                                     <textarea
-                                        className="flex-1 w-full p-4 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-purple-500 transition-colors resize-none leading-relaxed"
+                                        className="flex-1 w-full p-4 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-orange-500 transition-colors resize-none leading-relaxed"
                                         placeholder={`version: '3'\nservices:\n  web:\n    image: nginx`}
                                         value={clusterContent}
                                         onChange={(e) => setClusterContent(e.target.value)}
@@ -976,7 +1106,7 @@ function App() {
                                             {clusterResults.map((r) => (
                                                 <div key={r.node_id} className="flex items-start justify-between gap-3 p-3 rounded border border-zinc-800 bg-zinc-900/40">
                                                     <div className="min-w-0">
-                                                        <div className="font-mono text-xs text-blue-400 truncate">{r.node_id}</div>
+                                                        <div className="font-mono text-xs text-orange-400 truncate">{r.node_id}</div>
                                                         {r.error && <div className="text-xs text-red-400 mt-1 whitespace-pre-wrap break-words">{r.error}</div>}
                                                     </div>
                                                     <div className={`text-xs font-bold px-2 py-1 rounded ${
@@ -1002,7 +1132,7 @@ function App() {
                             <button
                                 onClick={deployCluster}
                                 disabled={clusterLoading || !clusterName.trim() || !clusterContent.trim() || clusterNodeIds.length === 0}
-                                className="px-6 py-2 bg-purple-600 text-white rounded text-sm hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-purple-900/20 transition-all font-medium flex items-center"
+                                className="px-6 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-orange-900/20 transition-all font-medium flex items-center"
                             >
                                 {clusterLoading ? (
                                     <>
@@ -1020,7 +1150,7 @@ function App() {
                     <div className="bg-zinc-900 rounded-lg shadow-2xl border border-zinc-800 w-full max-w-6xl max-h-[90vh] flex flex-col">
                         <div className="flex items-center justify-between border-b px-4 py-3">
                             <div className="text-base font-semibold text-zinc-200">
-                                Container: <span className="font-mono text-blue-400">{detailsContainer.Id.substring(0, 12)}</span>
+                                Container: <span className="font-mono text-orange-400">{detailsContainer.Id.substring(0, 12)}</span>
                             </div>
                             <button onClick={() => setDetailsOpen(false)} className="text-zinc-500 hover:text-zinc-300">
                                 <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6">
@@ -1056,7 +1186,7 @@ function App() {
                                     {/* Exec */}
                                     <div className="bg-zinc-900 border border-zinc-800 p-4 rounded-lg shadow-sm">
                                         <h3 className="text-sm font-semibold text-zinc-300 mb-3 flex items-center gap-2">
-                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 text-blue-500">
+                                            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-4 h-4 text-orange-500">
                                                 <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3" />
                                             </svg>
                                             Execute Command
@@ -1064,7 +1194,7 @@ function App() {
                                         <div className="flex gap-2 mb-2">
                                             <input
                                                 type="text"
-                                                className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-blue-500"
+                                                className="flex-1 p-2 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono text-zinc-300 focus:outline-none focus:border-orange-500"
                                                 placeholder="ls -la /app"
                                                 value={execCmd}
                                                 onChange={(e) => setExecCmd(e.target.value)}
@@ -1073,7 +1203,7 @@ function App() {
                                             <button
                                                 onClick={runExec}
                                                 disabled={execLoading || !execCmd.trim()}
-                                                className="px-3 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50"
+                                                className="px-3 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50"
                                             >
                                                 Run
                                             </button>
@@ -1111,7 +1241,7 @@ function App() {
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Image (required)</label>
                                 <input
                                     type="text"
-                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-colors"
+                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                     placeholder="e.g. nginx:latest"
                                     value={createImage}
                                     onChange={(e) => setCreateImage(e.target.value)}
@@ -1121,7 +1251,7 @@ function App() {
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Name (optional)</label>
                                 <input
                                     type="text"
-                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-colors"
+                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                     placeholder="e.g. my-nginx"
                                     value={createName}
                                     onChange={(e) => setCreateName(e.target.value)}
@@ -1130,7 +1260,7 @@ function App() {
                             <div className="flex items-center gap-3 bg-zinc-950/40 border border-zinc-800 rounded p-3">
                                 <input
                                     type="checkbox"
-                                    className="accent-blue-500"
+                                    className="accent-orange-500"
                                     checked={createAutoRestart}
                                     onChange={(e) => setCreateAutoRestart(e.target.checked)}
                                 />
@@ -1142,7 +1272,7 @@ function App() {
                                     <div key={i} className="flex gap-2 mb-2">
                                         <input
                                             type="text"
-                                            className="w-1/2 p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-colors"
+                                            className="w-1/2 p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                             placeholder="8080"
                                             value={p.host}
                                             onChange={(e) => updatePortRow(i, 'host', e.target.value)}
@@ -1150,7 +1280,7 @@ function App() {
                                         <span className="self-center text-zinc-500">:</span>
                                         <input
                                             type="text"
-                                            className="w-1/2 p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-blue-500 transition-colors"
+                                            className="w-1/2 p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm text-zinc-200 focus:outline-none focus:border-orange-500 transition-colors"
                                             placeholder="80"
                                             value={p.container}
                                             onChange={(e) => updatePortRow(i, 'container', e.target.value)}
@@ -1158,12 +1288,12 @@ function App() {
                                         <button onClick={() => removePortRow(i)} className="text-red-500 hover:text-red-400 px-2 transition-colors">×</button>
                                     </div>
                                 ))}
-                                <button onClick={addPortRow} className="text-xs text-blue-500 hover:text-blue-400 font-medium">+ Add Port</button>
+                                <button onClick={addPortRow} className="text-xs text-orange-500 hover:text-orange-400 font-medium">+ Add Port</button>
                             </div>
                             <div>
                                 <label className="block text-xs font-semibold text-zinc-400 mb-1 uppercase tracking-wider">Environment Variables (KEY=VALUE per line)</label>
                                 <textarea
-                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono h-24 text-zinc-300 focus:outline-none focus:border-blue-500 transition-colors"
+                                    className="w-full p-2.5 bg-zinc-950 border border-zinc-700 rounded text-sm font-mono h-24 text-zinc-300 focus:outline-none focus:border-orange-500 transition-colors"
                                     placeholder="FOO=bar"
                                     value={createEnv}
                                     onChange={(e) => setCreateEnv(e.target.value)}
@@ -1182,7 +1312,7 @@ function App() {
                                 <button
                                     onClick={handleCreateContainer}
                                     disabled={createLoading || !createImage.trim()}
-                                    className="px-4 py-2 bg-blue-600 text-white rounded text-sm hover:bg-blue-700 disabled:opacity-50 shadow-lg shadow-blue-900/20 transition-all font-medium flex items-center"
+                                    className="px-4 py-2 bg-orange-600 text-white rounded text-sm hover:bg-orange-700 disabled:opacity-50 shadow-lg shadow-orange-900/20 transition-all font-medium flex items-center"
                                 >
                                     {createLoading && <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>}
                                     {createLoading ? 'Deploying...' : 'Deploy'}

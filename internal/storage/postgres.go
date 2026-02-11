@@ -39,11 +39,13 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 	query := `
     CREATE TABLE IF NOT EXISTS nodes (
         id TEXT PRIMARY KEY,
+        name TEXT,
         machine_id TEXT,
         version TEXT,
         remote_addr TEXT,
         last_seen TIMESTAMP
     );
+    ALTER TABLE nodes ADD COLUMN IF NOT EXISTS name TEXT;
     `
 	_, err := s.db.Exec(ctx, query)
 	return err
@@ -51,20 +53,21 @@ func (s *PostgresStore) Init(ctx context.Context) error {
 
 func (s *PostgresStore) UpsertNode(ctx context.Context, node *Node) error {
 	query := `
-    INSERT INTO nodes (id, machine_id, version, remote_addr, last_seen)
-    VALUES ($1, $2, $3, $4, $5)
+    INSERT INTO nodes (id, name, machine_id, version, remote_addr, last_seen)
+    VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6)
     ON CONFLICT (id) DO UPDATE SET
+        name = COALESCE(NULLIF(EXCLUDED.name, ''), nodes.name),
         machine_id = EXCLUDED.machine_id,
         version = EXCLUDED.version,
         remote_addr = EXCLUDED.remote_addr,
         last_seen = EXCLUDED.last_seen;
     `
-	_, err := s.db.Exec(ctx, query, node.ID, node.MachineID, node.Version, node.RemoteAddr, node.LastSeen)
+	_, err := s.db.Exec(ctx, query, node.ID, node.Name, node.MachineID, node.Version, node.RemoteAddr, node.LastSeen)
 	return err
 }
 
 func (s *PostgresStore) ListNodes(ctx context.Context) ([]*Node, error) {
-	query := `SELECT id, machine_id, version, remote_addr, last_seen FROM nodes`
+	query := `SELECT id, COALESCE(name, ''), machine_id, version, remote_addr, last_seen FROM nodes`
 	rows, err := s.db.Query(ctx, query)
 	if err != nil {
 		return nil, err
@@ -74,7 +77,7 @@ func (s *PostgresStore) ListNodes(ctx context.Context) ([]*Node, error) {
 	var nodes []*Node
 	for rows.Next() {
 		var n Node
-		err := rows.Scan(&n.ID, &n.MachineID, &n.Version, &n.RemoteAddr, &n.LastSeen)
+		err := rows.Scan(&n.ID, &n.Name, &n.MachineID, &n.Version, &n.RemoteAddr, &n.LastSeen)
 		if err != nil {
 			return nil, err
 		}
@@ -84,9 +87,9 @@ func (s *PostgresStore) ListNodes(ctx context.Context) ([]*Node, error) {
 }
 
 func (s *PostgresStore) GetNode(ctx context.Context, id string) (*Node, error) {
-	query := `SELECT id, machine_id, version, remote_addr, last_seen FROM nodes WHERE id = $1`
+	query := `SELECT id, COALESCE(name, ''), machine_id, version, remote_addr, last_seen FROM nodes WHERE id = $1`
 	var n Node
-	err := s.db.QueryRow(ctx, query, id).Scan(&n.ID, &n.MachineID, &n.Version, &n.RemoteAddr, &n.LastSeen)
+	err := s.db.QueryRow(ctx, query, id).Scan(&n.ID, &n.Name, &n.MachineID, &n.Version, &n.RemoteAddr, &n.LastSeen)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil
@@ -94,4 +97,15 @@ func (s *PostgresStore) GetNode(ctx context.Context, id string) (*Node, error) {
 		return nil, err
 	}
 	return &n, nil
+}
+
+func (s *PostgresStore) RenameNode(ctx context.Context, id, name string) error {
+	query := `UPDATE nodes SET name = NULLIF($2, '') WHERE id = $1`
+	_, err := s.db.Exec(ctx, query, id, name)
+	return err
+}
+
+func (s *PostgresStore) DeleteNode(ctx context.Context, id string) error {
+	_, err := s.db.Exec(ctx, `DELETE FROM nodes WHERE id = $1`, id)
+	return err
 }
