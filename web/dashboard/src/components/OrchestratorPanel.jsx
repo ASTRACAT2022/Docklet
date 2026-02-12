@@ -49,6 +49,19 @@ function portsFromInspect(inspect) {
   return ports
 }
 
+function normalizeRestartPolicy(value) {
+  const policy = String(value || '').trim().toLowerCase()
+  if (!policy || policy === 'none') {
+    return 'no'
+  }
+  return policy
+}
+
+function isNameConflictError(err) {
+  const message = String(err?.message || '').toLowerCase()
+  return message.includes('already in use') || message.includes('conflict')
+}
+
 function safeNodeName(node) {
   const alias = String(node?.name || '').trim()
   if (alias) {
@@ -88,10 +101,22 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [redeployEnv, setRedeployEnv] = useState('')
   const [redeployPorts, setRedeployPorts] = useState('')
   const [redeployAutoRestart, setRedeployAutoRestart] = useState(true)
+  const [migrationFromNodeId, setMigrationFromNodeId] = useState('')
+  const [migrationToNodeId, setMigrationToNodeId] = useState('')
+  const [migrationKeepSource, setMigrationKeepSource] = useState(false)
+  const [migrationCount, setMigrationCount] = useState(0)
+  const [migrationCountLoading, setMigrationCountLoading] = useState(false)
+  const [migrationLoading, setMigrationLoading] = useState(false)
+  const [migrationError, setMigrationError] = useState('')
+  const [migrationResults, setMigrationResults] = useState([])
 
-  const connectedNodeIds = useMemo(
-    () => nodes.filter((node) => node.status === 'connected').map((node) => node.node_id),
+  const connectedNodes = useMemo(
+    () => nodes.filter((node) => node.status === 'connected'),
     [nodes],
+  )
+  const connectedNodeIds = useMemo(
+    () => connectedNodes.map((node) => node.node_id),
+    [connectedNodes],
   )
 
   const selectedNodes = useMemo(() => {
@@ -107,6 +132,9 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     setRunError('')
     setScanError('')
     setMatches([])
+    setMigrationError('')
+    setMigrationResults([])
+    setMigrationCount(0)
     setSelectedNodeIds((prev) => {
       if (prev.length > 0) {
         const filtered = prev.filter((id) => connectedNodeIds.includes(id))
@@ -117,6 +145,39 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       return connectedNodeIds
     })
   }, [open, connectedNodeIds])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    if (connectedNodes.length === 0) {
+      setMigrationFromNodeId('')
+      return
+    }
+    setMigrationFromNodeId((prev) => {
+      if (connectedNodes.some((node) => node.node_id === prev)) {
+        return prev
+      }
+      return connectedNodes[0].node_id
+    })
+  }, [open, connectedNodes])
+
+  useEffect(() => {
+    if (!open) {
+      return
+    }
+    const candidates = connectedNodes.filter((node) => node.node_id !== migrationFromNodeId)
+    if (candidates.length === 0) {
+      setMigrationToNodeId('')
+      return
+    }
+    setMigrationToNodeId((prev) => {
+      if (candidates.some((node) => node.node_id === prev)) {
+        return prev
+      }
+      return candidates[0].node_id
+    })
+  }, [open, connectedNodes, migrationFromNodeId])
 
   if (!open) {
     return null
@@ -149,6 +210,160 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       }
       return [...prev, nodeId]
     })
+  }
+
+  const refreshMigrationCount = async () => {
+    if (!migrationFromNodeId) {
+      setMigrationCount(0)
+      return
+    }
+    setMigrationCountLoading(true)
+    try {
+      const res = await apiFetch(`/api/nodes/${migrationFromNodeId}/containers`)
+      const data = await res.json()
+      const list = Array.isArray(data) ? data : []
+      setMigrationCount(list.length)
+    } catch (_err) {
+      setMigrationCount(0)
+    } finally {
+      setMigrationCountLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!open || !migrationFromNodeId) {
+      return
+    }
+    refreshMigrationCount()
+  }, [open, migrationFromNodeId])
+
+  const buildMigrationPayload = (container, inspect) => {
+    const image = String(inspect?.Config?.Image || container?.Image || '').trim()
+    const originalName = String(inspect?.Name || '').replace(/^\//, '') || containerPrimaryName(container)
+    const restartPolicy = normalizeRestartPolicy(inspect?.HostConfig?.RestartPolicy?.Name)
+    const payload = {
+      image,
+      name: originalName,
+      env: Array.isArray(inspect?.Config?.Env) ? inspect.Config.Env : [],
+      ports: portsFromInspect(inspect),
+      auto_restart: restartPolicy !== 'no',
+    }
+    if (restartPolicy !== 'no') {
+      payload.restart_policy = restartPolicy
+    }
+    return payload
+  }
+
+  const createContainerOnTarget = async (nodeId, payload, fallbackSuffix) => {
+    const create = async (nextPayload) => {
+      await apiFetch(`/api/nodes/${nodeId}/containers`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextPayload),
+      })
+      return nextPayload.name
+    }
+
+    try {
+      return await create(payload)
+    } catch (err) {
+      if (!payload.name || !isNameConflictError(err)) {
+        throw err
+      }
+      const renamedPayload = {
+        ...payload,
+        name: `${payload.name}-migrated-${fallbackSuffix}`,
+      }
+      return create(renamedPayload)
+    }
+  }
+
+  const runNodeMigration = async () => {
+    if (!migrationFromNodeId || !migrationToNodeId) {
+      setMigrationError('Выберите source и target ноды')
+      return
+    }
+    if (migrationFromNodeId === migrationToNodeId) {
+      setMigrationError('Source и target должны быть разными нодами')
+      return
+    }
+
+    const sourceNode = nodes.find((node) => node.node_id === migrationFromNodeId)
+    const targetNode = nodes.find((node) => node.node_id === migrationToNodeId)
+    const sourceName = safeNodeName(sourceNode)
+    const targetName = safeNodeName(targetNode)
+    const modeLabel = migrationKeepSource ? 'copy' : 'move'
+    if (!window.confirm(`Run ${modeLabel} of all containers from "${sourceName}" to "${targetName}"?`)) {
+      return
+    }
+
+    setMigrationLoading(true)
+    setMigrationError('')
+    setMigrationResults([])
+    try {
+      const sourceRes = await apiFetch(`/api/nodes/${migrationFromNodeId}/containers`)
+      const sourceData = await sourceRes.json()
+      const sourceContainers = Array.isArray(sourceData) ? sourceData : []
+      setMigrationCount(sourceContainers.length)
+      if (sourceContainers.length === 0) {
+        setMigrationError('На source-ноде нет контейнеров для миграции')
+        return
+      }
+
+      const results = []
+      for (let i = 0; i < sourceContainers.length; i += 1) {
+        const container = sourceContainers[i]
+        const containerID = String(container?.Id || '')
+        const shortID = containerID.slice(0, 12)
+        const containerName = containerPrimaryName(container) || shortID
+        try {
+          const inspectRes = await apiFetch(`/api/nodes/${migrationFromNodeId}/containers/${containerID}/inspect`)
+          const inspect = await inspectRes.json()
+          const payload = buildMigrationPayload(container, inspect)
+          if (!payload.image) {
+            throw new Error('image not found in inspect')
+          }
+          const finalName = await createContainerOnTarget(migrationToNodeId, payload, `${i + 1}`)
+
+          if (!migrationKeepSource) {
+            await apiFetch(`/api/nodes/${migrationFromNodeId}/containers/${containerID}`, { method: 'DELETE' })
+          }
+
+          const baseMessage = `created on ${targetName}${finalName ? ` as ${finalName}` : ''}`
+          results.push({
+            key: `${migrationFromNodeId}:${containerID}`,
+            ok: true,
+            nodeName: sourceName,
+            containerId: shortID,
+            containerName,
+            message: migrationKeepSource ? `${baseMessage}; source kept` : `${baseMessage}; removed from source`,
+          })
+        } catch (err) {
+          results.push({
+            key: `${migrationFromNodeId}:${containerID}`,
+            ok: false,
+            nodeName: sourceName,
+            containerId: shortID,
+            containerName,
+            message: err.message || 'migration failed',
+          })
+        }
+      }
+
+      setMigrationResults(results)
+      const failed = results.filter((result) => !result.ok).length
+      if (failed > 0) {
+        setMigrationError(`Миграция завершена с ошибками: ${failed} из ${results.length}`)
+      }
+      if (typeof onRefresh === 'function') {
+        onRefresh()
+      }
+      await refreshMigrationCount()
+    } catch (err) {
+      setMigrationError(err.message || 'Не удалось выполнить миграцию')
+    } finally {
+      setMigrationLoading(false)
+    }
   }
 
   const scanContainers = async () => {
@@ -339,6 +554,87 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
           </div>
 
           <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3 lg:col-span-3">
+            <div className="rounded-lg border border-orange-900/40 bg-orange-500/5 p-3">
+              <div className="mb-2 flex items-center justify-between gap-3">
+                <h4 className="text-sm font-semibold text-zinc-100">Node Migration</h4>
+                <Badge variant="default">{migrationCountLoading ? '...' : migrationCount} containers</Badge>
+              </div>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Source Node
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-200 focus:border-orange-500 focus:outline-none"
+                    value={migrationFromNodeId}
+                    onChange={(e) => setMigrationFromNodeId(e.target.value)}
+                  >
+                    {connectedNodes.map((node) => (
+                      <option key={node.node_id} value={node.node_id}>
+                        {safeNodeName(node)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                    Target Node
+                  </label>
+                  <select
+                    className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-200 focus:border-orange-500 focus:outline-none"
+                    value={migrationToNodeId}
+                    onChange={(e) => setMigrationToNodeId(e.target.value)}
+                  >
+                    {connectedNodes.filter((node) => node.node_id !== migrationFromNodeId).map((node) => (
+                      <option key={node.node_id} value={node.node_id}>
+                        {safeNodeName(node)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 self-end text-sm text-zinc-300">
+                  <input
+                    type="checkbox"
+                    className="accent-orange-500"
+                    checked={migrationKeepSource}
+                    onChange={(e) => setMigrationKeepSource(e.target.checked)}
+                  />
+                  Keep source containers (copy mode)
+                </label>
+                <div className="flex gap-2 self-end">
+                  <Button variant="outline" onClick={refreshMigrationCount} disabled={!migrationFromNodeId || migrationCountLoading || migrationLoading}>
+                    Refresh
+                  </Button>
+                  <Button
+                    variant="danger"
+                    onClick={runNodeMigration}
+                    disabled={migrationLoading || connectedNodes.length < 2 || !migrationFromNodeId || !migrationToNodeId}
+                  >
+                    {migrationLoading ? 'Migrating...' : 'Migrate All'}
+                  </Button>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-zinc-500">
+                Migration without agent changes: copies image/env/ports/restart policy and then removes source container in move mode.
+              </p>
+              {migrationError && <div className="mt-3 rounded-md border border-rose-800/60 bg-rose-500/10 p-2 text-sm text-rose-300">{migrationError}</div>}
+              <div className="mt-3 max-h-52 space-y-2 overflow-auto pr-1">
+                {migrationResults.map((result) => (
+                  <div key={result.key} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs">
+                    <div className="mb-1 flex items-center justify-between">
+                      <span className="truncate font-semibold text-zinc-200">{result.containerName}</span>
+                      <Badge variant={result.ok ? 'success' : 'danger'}>{result.ok ? 'ok' : 'fail'}</Badge>
+                    </div>
+                    <p className="font-mono text-zinc-500">{result.containerId}</p>
+                    <p className="mt-1 break-words text-zinc-400">{result.message}</p>
+                  </div>
+                ))}
+                {migrationResults.length === 0 && (
+                  <p className="text-xs text-zinc-500">Migration results will appear here.</p>
+                )}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
               <div className="md:col-span-2">
                 <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
