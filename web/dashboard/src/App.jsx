@@ -540,6 +540,8 @@ function App() {
         if (!node) return 'Unknown node'
         const alias = (node.name || '').trim()
         if (alias) return alias
+        const addr = (node.remote_addr || '').trim()
+        if (addr) return addr
         if (node.node_id) return `${node.node_id.substring(0, 8)}...`
         return 'Unknown node'
     }

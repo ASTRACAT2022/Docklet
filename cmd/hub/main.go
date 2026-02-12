@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/astracat/docklet/internal/server"
 	"github.com/astracat/docklet/internal/storage"
@@ -17,26 +19,42 @@ import (
 
 func main() {
 	dbURL := os.Getenv("DATABASE_URL")
-	if dbURL == "" {
-		// Fallback for local dev if not set
-		// log.Fatal("DATABASE_URL is required")
-		log.Println("DATABASE_URL not set, using default 'postgres://user:password@localhost:5432/docklet'")
-		dbURL = "postgres://user:password@localhost:5432/docklet"
-	}
+	dbURL = strings.TrimSpace(dbURL)
+	aliasPath := resolveAliasBackupPath()
 
 	ctx := context.Background()
-	var store storage.NodeRepository
+	var baseStore storage.NodeRepository
 
-	pgStore, err := storage.NewPostgresStore(ctx, dbURL)
-	if err != nil {
-		log.Printf("Warning: Failed to connect to database (%v). Falling back to IN-MEMORY storage.", err)
-		store = storage.NewMemoryStore()
+	if dbURL == "" {
+		log.Println("DATABASE_URL not set, using in-memory node store with alias backup")
+		baseStore = storage.NewMemoryStore()
 	} else {
-		store = pgStore
-		if err := store.Init(ctx); err != nil {
-			log.Printf("Warning: Failed to init DB schema (%v). Falling back to IN-MEMORY storage.", err)
-			store = storage.NewMemoryStore()
+		pgStore, err := storage.NewPostgresStore(ctx, dbURL)
+		if err != nil {
+			log.Printf("Warning: Failed to connect to database (%v). Falling back to IN-MEMORY storage.", err)
+			baseStore = storage.NewMemoryStore()
+		} else {
+			baseStore = pgStore
 		}
+	}
+
+	var store storage.NodeRepository
+	primary := storage.NewAliasBackupStore(baseStore, aliasPath)
+	if err := primary.Init(ctx); err != nil {
+		log.Printf("Warning: Failed to init store with alias backup (%v). Falling back to IN-MEMORY.", err)
+		memStore := storage.NewMemoryStore()
+		fallback := storage.NewAliasBackupStore(memStore, aliasPath)
+		if err2 := fallback.Init(ctx); err2 != nil {
+			log.Printf("Warning: Failed to init alias backup (%v). Running with plain in-memory storage.", err2)
+			if err3 := memStore.Init(ctx); err3 != nil {
+				log.Printf("Warning: Failed to init memory store: %v", err3)
+			}
+			store = memStore
+		} else {
+			store = fallback
+		}
+	} else {
+		store = primary
 	}
 	defer store.Close()
 
@@ -69,33 +87,34 @@ func main() {
 	// Start HTTP Server
 	go func() {
 		httpSrv := server.NewHTTPServer(hubServer, "./web/dashboard/dist")
-        // Check for custom SSL certs via Env
-        certFile := os.Getenv("DOCKLET_WEB_CERT")
-        keyFile := os.Getenv("DOCKLET_WEB_KEY")
-        
-        addr := ":1499"
-        if certFile != "" && keyFile != "" {
-            log.Printf("Starting Web Dashboard on %s (HTTPS)", addr)
-             // StartTLS is not exposed in HTTPServer struct, let's expose it or just use Start which handles it inside?
-             // Actually I modified http.go to handle it inside Start() if env vars are read there?
-             // Wait, I modified Start() in http.go but I didn't change the signature.
-             // Let's rely on Start() checking the env vars or better yet, pass them?
-             // The previous tool call modified http.go's Start method to read env vars directly.
-             // So here we just call Start.
-             if err := httpSrv.Start(addr); err != nil {
-                 log.Printf("HTTP Server error: %v", err)
-             }
-        } else {
-             if err := httpSrv.Start(addr); err != nil {
-			    log.Printf("HTTP Server error: %v", err)
-		    }
-        }
+		if err := httpSrv.Start(":1499"); err != nil {
+			log.Printf("HTTP Server error: %v", err)
+		}
 	}()
 
 	log.Printf("Docklet Hub listening on %s", port)
 	if err := s.Serve(lis); err != nil {
 		log.Fatalf("failed to serve: %v", err)
 	}
+}
+
+func resolveAliasBackupPath() string {
+	custom := strings.TrimSpace(os.Getenv("DOCKLET_ALIASES_FILE"))
+	if custom != "" {
+		if err := os.MkdirAll(filepath.Dir(custom), 0o700); err == nil {
+			return custom
+		}
+	}
+
+	stateDir := strings.TrimSpace(os.Getenv("DOCKLET_STATE_DIR"))
+	if stateDir == "" {
+		stateDir = "/etc/docklet"
+	}
+	if err := os.MkdirAll(stateDir, 0o700); err == nil {
+		return filepath.Join(stateDir, "node_aliases.json")
+	}
+
+	return filepath.Join(".docklet-data", "node_aliases.json")
 }
 
 func loadTLSCreds(caPath, certPath, keyPath string) (credentials.TransportCredentials, error) {
