@@ -180,10 +180,6 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     })
   }, [open, connectedNodes, migrationFromNodeId])
 
-  if (!open) {
-    return null
-  }
-
   const authHeaders = {
     Authorization: `Bearer ${token}`,
   }
@@ -509,6 +505,10 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     if (typeof onRefresh === 'function') {
       onRefresh()
     }
+  }
+
+  if (!open) {
+    return null
   }
 
   return (
