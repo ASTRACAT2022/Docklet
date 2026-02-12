@@ -1185,7 +1185,15 @@ func (s *HTTPServer) handleContainerActionDynamic(w http.ResponseWriter, r *http
 }
 
 func (s *HTTPServer) proxyCommand(w http.ResponseWriter, nodeID, cmd string, args []string) {
-	resp, err := s.executeNodeCommand(context.Background(), nodeID, cmd, args, 15*time.Second)
+	timeout := 15 * time.Second
+	switch cmd {
+	case "docker_logs":
+		timeout = 120 * time.Second
+	case "stack_up", "stack_down", "docker_run":
+		timeout = 60 * time.Second
+	}
+
+	resp, err := s.executeNodeCommand(context.Background(), nodeID, cmd, args, timeout)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

@@ -551,6 +551,17 @@ function App() {
         return String(container.Names[0] || '').replace(/^\//, '')
     }
 
+    const hasNodeIdentityChanges = (currentNode, updatedNode) => {
+        if (!currentNode || !updatedNode) return true
+        return (
+            (currentNode.name || '') !== (updatedNode.name || '') ||
+            (currentNode.status || '') !== (updatedNode.status || '') ||
+            (currentNode.remote_addr || '') !== (updatedNode.remote_addr || '') ||
+            (currentNode.version || '') !== (updatedNode.version || '') ||
+            (currentNode.machine_id || '') !== (updatedNode.machine_id || '')
+        )
+    }
+
     const selectNode = (node) => {
         setSelectedNode(node)
         if (typeof window !== 'undefined' && window.matchMedia('(max-width: 1023px)').matches) {
@@ -612,7 +623,9 @@ function App() {
             setContainers([])
             return
         }
-        if (updatedNode !== selectedNode) {
+        // Avoid replacing selectedNode object on every polling cycle.
+        // This prevents unnecessary container refresh while user clicks actions.
+        if (hasNodeIdentityChanges(selectedNode, updatedNode)) {
             setSelectedNode(updatedNode)
         }
     }, [nodes, selectedNode])

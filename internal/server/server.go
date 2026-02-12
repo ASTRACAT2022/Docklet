@@ -164,7 +164,14 @@ func (s *DockletServer) ExecuteCommand(ctx context.Context, req *pb.ExecuteComma
 		return nil, status.Errorf(codes.Internal, "failed to send command to agent: %v", err)
 	}
 
-	// 5. Wait for Result
+	// 5. Wait for Result.
+	// If caller already set a deadline in ctx, rely on that deadline.
+	// Use fallback timeout only when no deadline is provided.
+	var fallbackTimer <-chan time.Time
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		fallbackTimer = time.After(30 * time.Second)
+	}
+
 	select {
 	case res := <-resultChan:
 		return &pb.ExecuteCommandResponse{
@@ -174,7 +181,7 @@ func (s *DockletServer) ExecuteCommand(ctx context.Context, req *pb.ExecuteComma
 		}, nil
 	case <-ctx.Done():
 		return nil, status.Errorf(codes.DeadlineExceeded, "command timed out")
-	case <-time.After(10 * time.Second): // Hard timeout backup
+	case <-fallbackTimer:
 		return nil, status.Errorf(codes.DeadlineExceeded, "hub command timed out")
 	}
 }
