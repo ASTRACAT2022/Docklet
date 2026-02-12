@@ -110,6 +110,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [migrationKeepSource, setMigrationKeepSource] = useState(false)
   const [migrationCount, setMigrationCount] = useState(0)
   const [migrationCountLoading, setMigrationCountLoading] = useState(false)
+  const [migrationContainers, setMigrationContainers] = useState([])
+  const [migrationSelectedContainerID, setMigrationSelectedContainerID] = useState('')
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationError, setMigrationError] = useState('')
   const [migrationResults, setMigrationResults] = useState([])
@@ -235,6 +237,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
 
   const refreshMigrationCount = async () => {
     if (!migrationFromNodeId) {
+      setMigrationContainers([])
+      setMigrationSelectedContainerID('')
       setMigrationCount(0)
       return
     }
@@ -243,8 +247,18 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       const res = await apiFetch(`/api/nodes/${migrationFromNodeId}/containers`)
       const data = await res.json()
       const list = Array.isArray(data) ? data : []
+      setMigrationContainers(list)
       setMigrationCount(list.length)
+      setMigrationSelectedContainerID((prev) => {
+        if (!prev) return ''
+        if (list.some((container) => container?.Id === prev)) {
+          return prev
+        }
+        return ''
+      })
     } catch (_err) {
+      setMigrationContainers([])
+      setMigrationSelectedContainerID('')
       setMigrationCount(0)
     } finally {
       setMigrationCountLoading(false)
@@ -299,7 +313,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     }
   }
 
-  const runNodeMigration = async () => {
+  const runNodeMigration = async (onlySelected = false) => {
     if (!migrationFromNodeId || !migrationToNodeId) {
       setMigrationError('Выберите source и target ноды')
       return
@@ -308,13 +322,18 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       setMigrationError('Source и target должны быть разными нодами')
       return
     }
+    if (onlySelected && !migrationSelectedContainerID) {
+      setMigrationError('Выберите контейнер для выборочной миграции')
+      return
+    }
 
     const sourceNode = nodesList.find((node) => node.node_id === migrationFromNodeId)
     const targetNode = nodesList.find((node) => node.node_id === migrationToNodeId)
     const sourceName = getNodeNameByID(migrationFromNodeId, safeNodeName(sourceNode))
     const targetName = getNodeNameByID(migrationToNodeId, safeNodeName(targetNode))
+    const operationScope = onlySelected ? 'selected container' : 'all containers'
     const modeLabel = migrationKeepSource ? 'copy' : 'move'
-    if (!window.confirm(`Run ${modeLabel} of all containers from "${sourceName}" to "${targetName}"?`)) {
+    if (!window.confirm(`Run ${modeLabel} of ${operationScope} from "${sourceName}" to "${targetName}"?`)) {
       return
     }
 
@@ -324,10 +343,14 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     try {
       const sourceRes = await apiFetch(`/api/nodes/${migrationFromNodeId}/containers`)
       const sourceData = await sourceRes.json()
-      const sourceContainers = Array.isArray(sourceData) ? sourceData : []
-      setMigrationCount(sourceContainers.length)
+      const sourceContainersAll = Array.isArray(sourceData) ? sourceData : []
+      setMigrationContainers(sourceContainersAll)
+      const sourceContainers = onlySelected
+        ? sourceContainersAll.filter((container) => container?.Id === migrationSelectedContainerID)
+        : sourceContainersAll
+      setMigrationCount(sourceContainersAll.length)
       if (sourceContainers.length === 0) {
-        setMigrationError('На source-ноде нет контейнеров для миграции')
+        setMigrationError(onlySelected ? 'Выбранный контейнер не найден на source-ноде' : 'На source-ноде нет контейнеров для миграции')
         return
       }
 
@@ -592,7 +615,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
                 <h4 className="text-sm font-semibold text-zinc-100">Node Migration</h4>
                 <Badge variant="default">{migrationCountLoading ? '...' : migrationCount} containers</Badge>
               </div>
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
                 <div>
                   <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
                     Source Node
@@ -634,16 +657,49 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
                   />
                   Keep source containers (copy mode)
                 </label>
-                <div className="flex gap-2 self-end">
+                <div className="flex gap-2 self-end md:col-span-2">
+                  <div className="flex-1 min-w-0">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Select Container
+                    </label>
+                    <select
+                      className="h-10 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 text-sm text-zinc-200 focus:border-orange-500 focus:outline-none"
+                      value={migrationSelectedContainerID}
+                      onChange={(e) => setMigrationSelectedContainerID(e.target.value)}
+                      disabled={migrationContainers.length === 0 || migrationCountLoading || migrationLoading}
+                    >
+                      <option value="">-- choose for single migration --</option>
+                      {migrationContainers.map((container) => {
+                        const containerID = String(container?.Id || '')
+                        const shortID = containerID.slice(0, 12)
+                        const primaryName = containerPrimaryName(container)
+                        const image = String(container?.Image || '')
+                        const title = [primaryName || shortID, image].filter(Boolean).join(' | ')
+                        return (
+                          <option key={containerID} value={containerID}>
+                            {title}
+                          </option>
+                        )
+                      })}
+                    </select>
+                  </div>
+                </div>
+                <div className="flex gap-2 self-end md:col-span-2">
                   <Button variant="outline" onClick={refreshMigrationCount} disabled={!migrationFromNodeId || migrationCountLoading || migrationLoading}>
                     Refresh
                   </Button>
                   <Button
                     variant="danger"
-                    onClick={runNodeMigration}
+                    onClick={() => runNodeMigration(false)}
                     disabled={migrationLoading || connectedNodes.length < 2 || !migrationFromNodeId || !migrationToNodeId}
                   >
                     {migrationLoading ? 'Migrating...' : 'Migrate All'}
+                  </Button>
+                  <Button
+                    onClick={() => runNodeMigration(true)}
+                    disabled={migrationLoading || connectedNodes.length < 2 || !migrationFromNodeId || !migrationToNodeId || !migrationSelectedContainerID}
+                  >
+                    {migrationLoading ? 'Migrating...' : 'Migrate Selected'}
                   </Button>
                 </div>
               </div>
