@@ -109,10 +109,11 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationError, setMigrationError] = useState('')
   const [migrationResults, setMigrationResults] = useState([])
+  const nodesList = Array.isArray(nodes) ? nodes : []
 
   const connectedNodes = useMemo(
-    () => nodes.filter((node) => node.status === 'connected'),
-    [nodes],
+    () => nodesList.filter((node) => node.status === 'connected'),
+    [nodesList],
   )
   const connectedNodeIds = useMemo(
     () => connectedNodes.map((node) => node.node_id),
@@ -121,8 +122,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
 
   const selectedNodes = useMemo(() => {
     const selected = new Set(selectedNodeIds)
-    return nodes.filter((node) => selected.has(node.node_id))
-  }, [nodes, selectedNodeIds])
+    return nodesList.filter((node) => selected.has(node.node_id))
+  }, [nodesList, selectedNodeIds])
 
   useEffect(() => {
     if (!open) {
@@ -288,8 +289,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       return
     }
 
-    const sourceNode = nodes.find((node) => node.node_id === migrationFromNodeId)
-    const targetNode = nodes.find((node) => node.node_id === migrationToNodeId)
+    const sourceNode = nodesList.find((node) => node.node_id === migrationFromNodeId)
+    const targetNode = nodesList.find((node) => node.node_id === migrationToNodeId)
     const sourceName = safeNodeName(sourceNode)
     const targetName = safeNodeName(targetNode)
     const modeLabel = migrationKeepSource ? 'copy' : 'move'
@@ -511,8 +512,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-4">
-      <Card className="flex max-h-[92dvh] w-full max-w-7xl flex-col border-zinc-700 bg-zinc-950 sm:max-h-[90vh]">
+    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/80 p-2 backdrop-blur-sm sm:p-4">
+      <Card className="mt-2 flex h-[92vh] max-h-[92vh] w-full max-w-7xl flex-col border-zinc-700 bg-zinc-950 sm:mt-0 sm:h-[90vh] sm:max-h-[90vh]">
         <CardHeader className="flex flex-row items-center justify-between gap-3">
           <div>
             <CardTitle className="text-zinc-100">Orchestrator Mode</CardTitle>
@@ -523,19 +524,19 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
           <Button variant="outline" onClick={onClose}>Close</Button>
         </CardHeader>
 
-        <CardContent className="grid flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-4">
+        <CardContent className="grid min-h-0 flex-1 grid-cols-1 gap-4 overflow-auto lg:grid-cols-4">
           <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/60 p-3">
             <div className="flex items-center justify-between">
               <h4 className="text-sm font-semibold text-zinc-200">Target Nodes</h4>
-              <Badge variant="default">{selectedNodeIds.length}/{nodes.length}</Badge>
+              <Badge variant="default">{selectedNodeIds.length}/{nodesList.length}</Badge>
             </div>
             <div className="flex gap-2">
               <Button size="sm" variant="outline" onClick={() => setSelectedNodeIds(connectedNodeIds)}>Connected</Button>
-              <Button size="sm" variant="outline" onClick={() => setSelectedNodeIds(nodes.map((n) => n.node_id))}>All</Button>
+              <Button size="sm" variant="outline" onClick={() => setSelectedNodeIds(nodesList.map((n) => n.node_id))}>All</Button>
               <Button size="sm" variant="outline" onClick={() => setSelectedNodeIds([])}>Clear</Button>
             </div>
             <div className="max-h-[320px] space-y-2 overflow-auto pr-1">
-              {nodes.map((node) => (
+              {nodesList.map((node) => (
                 <label key={node.node_id} className="flex cursor-pointer items-start gap-2 rounded-md border border-zinc-800 bg-zinc-900 p-2">
                   <input
                     type="checkbox"
