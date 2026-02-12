@@ -67,6 +67,10 @@ function safeNodeName(node) {
   if (alias) {
     return alias
   }
+  const addr = String(node?.remote_addr || '').trim()
+  if (addr) {
+    return addr
+  }
   return String(node?.node_id || '').slice(0, 8) + '...'
 }
 
@@ -124,6 +128,26 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     const selected = new Set(selectedNodeIds)
     return nodesList.filter((node) => selected.has(node.node_id))
   }, [nodesList, selectedNodeIds])
+
+  const nodeByID = useMemo(() => {
+    const map = new Map()
+    for (const node of nodesList) {
+      map.set(node.node_id, node)
+    }
+    return map
+  }, [nodesList])
+
+  const getNodeNameByID = (nodeID, fallback = '') => {
+    const node = nodeByID.get(nodeID)
+    if (node) {
+      return safeNodeName(node)
+    }
+    const fallbackName = String(fallback || '').trim()
+    if (fallbackName) {
+      return fallbackName
+    }
+    return String(nodeID || '').slice(0, 8) + '...'
+  }
 
   useEffect(() => {
     if (!open) {
@@ -287,8 +311,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
 
     const sourceNode = nodesList.find((node) => node.node_id === migrationFromNodeId)
     const targetNode = nodesList.find((node) => node.node_id === migrationToNodeId)
-    const sourceName = safeNodeName(sourceNode)
-    const targetName = safeNodeName(targetNode)
+    const sourceName = getNodeNameByID(migrationFromNodeId, safeNodeName(sourceNode))
+    const targetName = getNodeNameByID(migrationToNodeId, safeNodeName(targetNode))
     const modeLabel = migrationKeepSource ? 'copy' : 'move'
     if (!window.confirm(`Run ${modeLabel} of all containers from "${sourceName}" to "${targetName}"?`)) {
       return
@@ -330,6 +354,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
           results.push({
             key: `${migrationFromNodeId}:${containerID}`,
             ok: true,
+            nodeId: migrationFromNodeId,
             nodeName: sourceName,
             containerId: shortID,
             containerName,
@@ -339,6 +364,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
           results.push({
             key: `${migrationFromNodeId}:${containerID}`,
             ok: false,
+            nodeId: migrationFromNodeId,
             nodeName: sourceName,
             containerId: shortID,
             containerName,
@@ -397,10 +423,11 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
             .join(' ')
             .toLowerCase()
           if (!query || haystack.includes(query)) {
+            const displayName = getNodeNameByID(chunk.node.node_id, safeNodeName(chunk.node))
             nextMatches.push({
               key: `${chunk.node.node_id}:${container.Id}`,
               nodeId: chunk.node.node_id,
-              nodeName: safeNodeName(chunk.node),
+              nodeName: displayName,
               container,
             })
           }
@@ -408,8 +435,10 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       }
 
       nextMatches.sort((a, b) => {
-        if (a.nodeName < b.nodeName) return -1
-        if (a.nodeName > b.nodeName) return 1
+        const aName = getNodeNameByID(a.nodeId, a.nodeName)
+        const bName = getNodeNameByID(b.nodeId, b.nodeName)
+        if (aName < bName) return -1
+        if (aName > bName) return 1
         return a.container.Id.localeCompare(b.container.Id)
       })
       setMatches(nextMatches)
@@ -437,11 +466,12 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const runRedeploy = async (match) => {
     const inspectRes = await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/inspect`)
     const inspect = await inspectRes.json()
+    const nodeName = getNodeNameByID(match.nodeId, match.nodeName)
 
     const oldName = String(inspect?.Name || '').replace(/^\//, '') || containerPrimaryName(match.container)
     const payload = {
       image: String(redeployImage || '').trim() || inspect?.Config?.Image || match.container.Image,
-      name: resolveNameTemplate(redeployName, { node_id: match.nodeId, name: match.nodeName }, match.container, oldName),
+      name: resolveNameTemplate(redeployName, { node_id: match.nodeId, name: nodeName }, match.container, oldName),
       env: String(redeployEnv || '').trim() ? parseEnvInput(redeployEnv) : inspect?.Config?.Env || [],
       ports: String(redeployPorts || '').trim() ? parsePortsInput(redeployPorts) : portsFromInspect(inspect),
       auto_restart: redeployAutoRestart,
@@ -483,7 +513,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
         results.push({
           key: match.key,
           ok: true,
-          nodeName: match.nodeName,
+          nodeId: match.nodeId,
+          nodeName: getNodeNameByID(match.nodeId, match.nodeName),
           containerId: String(match.container.Id || '').slice(0, 12),
           containerName: containerPrimaryName(match.container),
           message,
@@ -492,7 +523,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
         results.push({
           key: match.key,
           ok: false,
-          nodeName: match.nodeName,
+          nodeId: match.nodeId,
+          nodeName: getNodeNameByID(match.nodeId, match.nodeName),
           containerId: String(match.container.Id || '').slice(0, 12),
           containerName: containerPrimaryName(match.container),
           message: err.message || 'operation failed',
@@ -626,6 +658,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
                       <span className="truncate font-semibold text-zinc-200">{result.containerName}</span>
                       <Badge variant={result.ok ? 'success' : 'danger'}>{result.ok ? 'ok' : 'fail'}</Badge>
                     </div>
+                    <p className="truncate text-zinc-500">{getNodeNameByID(result.nodeId, result.nodeName)}</p>
                     <p className="font-mono text-zinc-500">{result.containerId}</p>
                     <p className="mt-1 break-words text-zinc-400">{result.message}</p>
                   </div>
@@ -748,7 +781,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
                 <div className="max-h-64 space-y-2 overflow-auto pr-1">
                   {matches.map((match) => (
                     <div key={match.key} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs">
-                      <p className="font-semibold text-zinc-200">{match.nodeName}</p>
+                      <p className="font-semibold text-zinc-200">{getNodeNameByID(match.nodeId, match.nodeName)}</p>
                       <p className="font-mono text-zinc-500">{String(match.container.Id || '').slice(0, 12)}</p>
                       <p className="truncate text-zinc-400">{match.container.Image}</p>
                       <p className="truncate text-zinc-500">{containerPrimaryName(match.container)}</p>
@@ -769,7 +802,7 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
                   {runResults.map((result) => (
                     <div key={result.key} className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs">
                       <div className="mb-1 flex items-center justify-between">
-                        <span className="truncate font-semibold text-zinc-200">{result.nodeName}</span>
+                        <span className="truncate font-semibold text-zinc-200">{getNodeNameByID(result.nodeId, result.nodeName)}</span>
                         <Badge variant={result.ok ? 'success' : 'danger'}>{result.ok ? 'ok' : 'fail'}</Badge>
                       </div>
                       <p className="font-mono text-zinc-500">{result.containerId}</p>
