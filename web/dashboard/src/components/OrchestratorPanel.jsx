@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge } from './ui/badge'
 import { Button } from './ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from './ui/card'
@@ -89,6 +89,22 @@ function resolveNameTemplate(template, node, container, fallback) {
     .replaceAll('{name}', containerPrimaryName(container) || fallback || 'container')
 }
 
+function chunkItems(items, size) {
+  const chunks = []
+  const normalizedSize = Math.max(1, Number(size) || 1)
+  for (let i = 0; i < items.length; i += normalizedSize) {
+    chunks.push(items.slice(i, i + normalizedSize))
+  }
+  return chunks
+}
+
+function formatNextWaveTime(timestamp) {
+  if (!timestamp) {
+    return ''
+  }
+  return new Date(timestamp).toLocaleString()
+}
+
 function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [selectedNodeIds, setSelectedNodeIds] = useState([])
   const [scanQuery, setScanQuery] = useState('')
@@ -105,6 +121,14 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [redeployEnv, setRedeployEnv] = useState('')
   const [redeployPorts, setRedeployPorts] = useState('')
   const [redeployAutoRestart, setRedeployAutoRestart] = useState(true)
+  const [rolloutBatchSize, setRolloutBatchSize] = useState('2')
+  const [rolloutDelayMinutes, setRolloutDelayMinutes] = useState('60')
+  const [rolloutRunning, setRolloutRunning] = useState(false)
+  const [rolloutMode, setRolloutMode] = useState('')
+  const [rolloutWaveIndex, setRolloutWaveIndex] = useState(0)
+  const [rolloutWaveTotal, setRolloutWaveTotal] = useState(0)
+  const [rolloutStatus, setRolloutStatus] = useState('')
+  const [rolloutNextWaveAt, setRolloutNextWaveAt] = useState(null)
   const [migrationFromNodeId, setMigrationFromNodeId] = useState('')
   const [migrationToNodeId, setMigrationToNodeId] = useState('')
   const [migrationKeepSource, setMigrationKeepSource] = useState(false)
@@ -115,6 +139,8 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
   const [migrationLoading, setMigrationLoading] = useState(false)
   const [migrationError, setMigrationError] = useState('')
   const [migrationResults, setMigrationResults] = useState([])
+  const rolloutTimerRef = useRef(null)
+  const rolloutCancelRef = useRef(false)
   const nodesList = Array.isArray(nodes) ? nodes : []
 
   const connectedNodes = useMemo(
@@ -159,6 +185,10 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     setRunError('')
     setScanError('')
     setMatches([])
+    setRolloutStatus('')
+    setRolloutNextWaveAt(null)
+    setRolloutWaveIndex(0)
+    setRolloutWaveTotal(0)
     setMigrationError('')
     setMigrationResults([])
     setMigrationCount(0)
@@ -172,6 +202,28 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
       return connectedNodeIds
     })
   }, [open, connectedNodeIds])
+
+  useEffect(() => {
+    if (open || !rolloutRunning) {
+      return
+    }
+    rolloutCancelRef.current = true
+    if (rolloutTimerRef.current) {
+      clearTimeout(rolloutTimerRef.current)
+      rolloutTimerRef.current = null
+    }
+    setRolloutRunning(false)
+    setRolloutMode('')
+    setRolloutStatus('Поэтапное обновление остановлено: окно закрыто')
+    setRolloutNextWaveAt(null)
+  }, [open, rolloutRunning])
+
+  useEffect(() => () => {
+    rolloutCancelRef.current = true
+    if (rolloutTimerRef.current) {
+      clearTimeout(rolloutTimerRef.current)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) {
@@ -473,19 +525,6 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     }
   }
 
-  const runSimpleAction = async (match) => {
-    if (action === 'start') {
-      await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/start`, { method: 'POST' })
-      return 'started'
-    }
-    if (action === 'stop') {
-      await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/stop`, { method: 'POST' })
-      return 'stopped'
-    }
-    await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}`, { method: 'DELETE' })
-    return 'deleted'
-  }
-
   const runRedeploy = async (match) => {
     const inspectRes = await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/inspect`)
     const inspect = await inspectRes.json()
@@ -519,6 +558,175 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     return payload.name ? `recreated as ${payload.name}` : 'recreated'
   }
 
+  const buildRunResult = (match, ok, message) => ({
+    key: match.key,
+    ok,
+    nodeId: match.nodeId,
+    nodeName: getNodeNameByID(match.nodeId, match.nodeName),
+    containerId: String(match.container.Id || '').slice(0, 12),
+    containerName: containerPrimaryName(match.container),
+    message,
+  })
+ 
+  const executeMatchAction = async (match, overrideAction = action) => {
+    if (overrideAction === 'redeploy') {
+      return runRedeploy(match)
+    }
+    if (overrideAction === 'start') {
+      await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/start`, { method: 'POST' })
+      return 'started'
+    }
+    if (overrideAction === 'stop') {
+      await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}/stop`, { method: 'POST' })
+      return 'stopped'
+    }
+    await apiFetch(`/api/nodes/${match.nodeId}/containers/${match.container.Id}`, { method: 'DELETE' })
+    return 'deleted'
+  }
+
+  const runMatches = async (targetMatches, overrideAction = action) => {
+    const results = []
+    for (const match of targetMatches) {
+      try {
+        const message = await executeMatchAction(match, overrideAction)
+        results.push(buildRunResult(match, true, message))
+      } catch (err) {
+        results.push(buildRunResult(match, false, err.message || 'operation failed'))
+      }
+    }
+    return results
+  }
+
+  const waitForNextWave = async (delayMs) => new Promise((resolve) => {
+    rolloutTimerRef.current = setTimeout(() => {
+      rolloutTimerRef.current = null
+      resolve()
+    }, delayMs)
+  })
+
+  const stopRollout = () => {
+    rolloutCancelRef.current = true
+    if (rolloutTimerRef.current) {
+      clearTimeout(rolloutTimerRef.current)
+      rolloutTimerRef.current = null
+    }
+    setRolloutRunning(false)
+    setRolloutMode('')
+    setRolloutNextWaveAt(null)
+    setRolloutStatus('Поэтапное обновление остановлено вручную')
+  }
+
+  const runFullRedeploy = async () => {
+    if (matches.length === 0) {
+      setRunError('Сначала выполните Scan и найдите контейнеры для обновления')
+      return
+    }
+    if (!window.confirm(`Обновить сразу все найденные контейнеры (${matches.length}) на выбранных нодах?`)) {
+      return
+    }
+
+    rolloutCancelRef.current = false
+    setRunLoading(true)
+    setRunError('')
+    setRunResults([])
+    setRolloutRunning(true)
+    setRolloutMode('full')
+    setRolloutWaveIndex(1)
+    setRolloutWaveTotal(1)
+    setRolloutNextWaveAt(null)
+    setRolloutStatus(`Полное обновление запущено: ${matches.length} контейнеров`)
+
+    try {
+      const results = await runMatches(matches, 'redeploy')
+      setRunResults(results)
+      const failed = results.filter((result) => !result.ok).length
+      setRolloutStatus(failed > 0 ? `Полное обновление завершено с ошибками: ${failed} из ${results.length}` : `Полное обновление завершено: ${results.length} контейнеров`)
+      if (typeof onRefresh === 'function') {
+        onRefresh()
+      }
+    } catch (err) {
+      setRunError(err.message || 'Не удалось выполнить полное обновление')
+      setRolloutStatus('Полное обновление завершилось с ошибкой')
+    } finally {
+      setRunLoading(false)
+      setRolloutRunning(false)
+      setRolloutMode('')
+    }
+  }
+
+  const runGradualRedeploy = async () => {
+    if (matches.length === 0) {
+      setRunError('Сначала выполните Scan и найдите контейнеры для обновления')
+      return
+    }
+
+    const batchSize = Math.max(1, parseInt(rolloutBatchSize, 10) || 0)
+    const delayMinutes = Math.max(1, parseInt(rolloutDelayMinutes, 10) || 0)
+    const waves = chunkItems(matches, batchSize)
+
+    if (!window.confirm(`Запустить поэтапное обновление ${matches.length} контейнеров волнами по ${batchSize} шт. с паузой ${delayMinutes} мин.? Панель должна оставаться открытой до завершения.`)) {
+      return
+    }
+
+    rolloutCancelRef.current = false
+    setRunLoading(true)
+    setRunError('')
+    setRunResults([])
+    setRolloutRunning(true)
+    setRolloutMode('gradual')
+    setRolloutWaveIndex(0)
+    setRolloutWaveTotal(waves.length)
+    setRolloutNextWaveAt(null)
+    setRolloutStatus(`Поэтапное обновление запущено: ${waves.length} волн`)
+
+    try {
+      for (let index = 0; index < waves.length; index += 1) {
+        if (rolloutCancelRef.current) {
+          break
+        }
+
+        const waveNumber = index + 1
+        const currentWave = waves[index]
+        setRolloutWaveIndex(waveNumber)
+        setRolloutNextWaveAt(null)
+        setRolloutStatus(`Волна ${waveNumber}/${waves.length}: обновление ${currentWave.length} контейнеров`)
+
+        const waveResults = await runMatches(currentWave, 'redeploy')
+        setRunResults((prev) => [...prev, ...waveResults])
+
+        if (typeof onRefresh === 'function') {
+          onRefresh()
+        }
+
+        if (index < waves.length - 1 && !rolloutCancelRef.current) {
+          const nextWaveAt = Date.now() + delayMinutes * 60 * 1000
+          setRolloutNextWaveAt(nextWaveAt)
+          setRolloutStatus(`Волна ${waveNumber}/${waves.length} завершена. Следующая волна: ${formatNextWaveTime(nextWaveAt)}`)
+          await waitForNextWave(delayMinutes * 60 * 1000)
+        }
+      }
+
+      if (rolloutCancelRef.current) {
+        return
+      }
+
+      setRolloutNextWaveAt(null)
+      setRolloutStatus(`Поэтапное обновление завершено: ${matches.length} контейнеров`)
+    } catch (err) {
+      setRunError(err.message || 'Не удалось выполнить поэтапное обновление')
+      setRolloutStatus('Поэтапное обновление завершилось с ошибкой')
+    } finally {
+      setRunLoading(false)
+      setRolloutRunning(false)
+      setRolloutMode('')
+      setRolloutNextWaveAt(null)
+      if (rolloutTimerRef.current) {
+        clearTimeout(rolloutTimerRef.current)
+        rolloutTimerRef.current = null
+      }
+    }
+  }
+
   const runBulkAction = async () => {
     if (matches.length === 0) {
       setRunError('Сначала выполните Scan и выберите контейнеры по фильтру')
@@ -528,32 +736,12 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
     setRunLoading(true)
     setRunError('')
     setRunResults([])
+    setRolloutStatus('')
+    setRolloutWaveIndex(0)
+    setRolloutWaveTotal(0)
+    setRolloutNextWaveAt(null)
 
-    const results = []
-    for (const match of matches) {
-      try {
-        const message = action === 'redeploy' ? await runRedeploy(match) : await runSimpleAction(match)
-        results.push({
-          key: match.key,
-          ok: true,
-          nodeId: match.nodeId,
-          nodeName: getNodeNameByID(match.nodeId, match.nodeName),
-          containerId: String(match.container.Id || '').slice(0, 12),
-          containerName: containerPrimaryName(match.container),
-          message,
-        })
-      } catch (err) {
-        results.push({
-          key: match.key,
-          ok: false,
-          nodeId: match.nodeId,
-          nodeName: getNodeNameByID(match.nodeId, match.nodeName),
-          containerId: String(match.container.Id || '').slice(0, 12),
-          containerName: containerPrimaryName(match.container),
-          message: err.message || 'operation failed',
-        })
-      }
-    }
+    const results = await runMatches(matches, action)
 
     setRunResults(results)
     setRunLoading(false)
@@ -754,58 +942,129 @@ function OrchestratorPanel({ open, onClose, token, nodes, onRefresh }) {
             </div>
 
             {action === 'redeploy' && (
-              <div className="grid grid-cols-1 gap-3 rounded-lg border border-orange-900/50 bg-orange-500/5 p-3 md:grid-cols-2">
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    New Image (optional)
+              <div className="space-y-3 rounded-lg border border-orange-900/50 bg-orange-500/5 p-3">
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      New Image (optional)
+                    </label>
+                    <Input
+                      placeholder="Leave empty to keep current image"
+                      value={redeployImage}
+                      onChange={(e) => setRedeployImage(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      New Name (optional)
+                    </label>
+                    <Input
+                      placeholder="Supports {node} and {name}"
+                      value={redeployName}
+                      onChange={(e) => setRedeployName(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Ports (host:container per line)
+                    </label>
+                    <textarea
+                      className="h-24 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none"
+                      placeholder="8080:80"
+                      value={redeployPorts}
+                      onChange={(e) => setRedeployPorts(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Env (KEY=VALUE per line)
+                    </label>
+                    <textarea
+                      className="h-24 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none"
+                      placeholder="APP_ENV=prod"
+                      value={redeployEnv}
+                      onChange={(e) => setRedeployEnv(e.target.value)}
+                    />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-zinc-300 md:col-span-2">
+                    <input
+                      type="checkbox"
+                      className="accent-orange-500"
+                      checked={redeployAutoRestart}
+                      onChange={(e) => setRedeployAutoRestart(e.target.checked)}
+                    />
+                    Auto-restart after redeploy
                   </label>
-                  <Input
-                    placeholder="Leave empty to keep current image"
-                    value={redeployImage}
-                    onChange={(e) => setRedeployImage(e.target.value)}
-                  />
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    New Name (optional)
-                  </label>
-                  <Input
-                    placeholder="Supports {node} and {name}"
-                    value={redeployName}
-                    onChange={(e) => setRedeployName(e.target.value)}
-                  />
+
+                <div className="grid grid-cols-1 gap-3 rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 md:grid-cols-4">
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Волна
+                    </label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={rolloutBatchSize}
+                      onChange={(e) => setRolloutBatchSize(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Пауза, мин
+                    </label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={rolloutDelayMinutes}
+                      onChange={(e) => setRolloutDelayMinutes(e.target.value)}
+                    />
+                  </div>
+                  <div className="md:col-span-2">
+                    <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
+                      Режим обновления
+                    </label>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        onClick={runGradualRedeploy}
+                        disabled={runLoading || matches.length === 0 || rolloutRunning}
+                      >
+                        {rolloutRunning && rolloutMode === 'gradual' ? 'Rolling...' : 'Gradual Update'}
+                      </Button>
+                      <Button
+                        variant="danger"
+                        onClick={runFullRedeploy}
+                        disabled={runLoading || matches.length === 0 || rolloutRunning}
+                      >
+                        {rolloutRunning && rolloutMode === 'full' ? 'Updating...' : 'Full Update'}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        onClick={stopRollout}
+                        disabled={!rolloutRunning || rolloutMode !== 'gradual'}
+                      >
+                        Stop Schedule
+                      </Button>
+                    </div>
+                  </div>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    Ports (host:container per line)
-                  </label>
-                  <textarea
-                    className="h-24 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none"
-                    placeholder="8080:80"
-                    value={redeployPorts}
-                    onChange={(e) => setRedeployPorts(e.target.value)}
-                  />
+
+                <div className="rounded-lg border border-zinc-800 bg-zinc-950/60 p-3 text-xs text-zinc-400">
+                  <div className="flex flex-wrap items-center gap-3">
+                    <span className="font-semibold text-zinc-200">Rollout</span>
+                    <Badge variant={rolloutRunning ? 'default' : 'outline'}>
+                      {rolloutRunning ? 'active' : 'idle'}
+                    </Badge>
+                    <span>
+                      Волна: {rolloutWaveIndex}/{rolloutWaveTotal || 0}
+                    </span>
+                    {rolloutNextWaveAt && <span>Next: {formatNextWaveTime(rolloutNextWaveAt)}</span>}
+                  </div>
+                  <p className="mt-2">{rolloutStatus || 'Можно запускать либо поэтапное обновление по волнам, либо полное обновление на всех найденных нодах сразу.'}</p>
+                  <p className="mt-2 text-zinc-500">
+                    Для gradual update панель должна оставаться открытой до завершения всех волн.
+                  </p>
                 </div>
-                <div>
-                  <label className="mb-1 block text-xs font-semibold uppercase tracking-wide text-zinc-500">
-                    Env (KEY=VALUE per line)
-                  </label>
-                  <textarea
-                    className="h-24 w-full rounded-lg border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-500 focus:border-orange-500 focus:outline-none"
-                    placeholder="APP_ENV=prod"
-                    value={redeployEnv}
-                    onChange={(e) => setRedeployEnv(e.target.value)}
-                  />
-                </div>
-                <label className="flex items-center gap-2 text-sm text-zinc-300 md:col-span-2">
-                  <input
-                    type="checkbox"
-                    className="accent-orange-500"
-                    checked={redeployAutoRestart}
-                    onChange={(e) => setRedeployAutoRestart(e.target.checked)}
-                  />
-                  Auto-restart after redeploy
-                </label>
               </div>
             )}
 
