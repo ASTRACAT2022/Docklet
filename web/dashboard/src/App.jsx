@@ -62,6 +62,11 @@ function App() {
     const [clustersError, setClustersError] = useState('')
     const [clusterRenameId, setClusterRenameId] = useState(null)
     const [clusterRenameValue, setClusterRenameValue] = useState('')
+    const [clusterLogs, setClusterLogs] = useState([])
+    const [clusterLogsLoading, setClusterLogsLoading] = useState(false)
+    const [clusterLogsError, setClusterLogsError] = useState('')
+    const [clusterLogsTarget, setClusterLogsTarget] = useState(null)
+    const [clusterLogsFollow, setClusterLogsFollow] = useState(false)
     const [orchestratorOpen, setOrchestratorOpen] = useState(false)
 
     const handleLogin = (newToken) => {
@@ -286,7 +291,7 @@ function App() {
                 throw new Error(text || 'Failed to deploy cluster')
             }
             const data = await res.json()
-            setClusterResults(data.results || [])
+            setClusterResults(mergeClusterResults(clusterNodeIds, [], data.results || []))
             fetchNodes()
             if (selectedNode) fetchContainers(selectedNode.node_id)
             fetchClusters()
@@ -329,11 +334,231 @@ function App() {
         }
     }
 
+    const mergeClusterResults = (nodeIds, downResults = [], upResults = []) => {
+        const downMap = new Map((Array.isArray(downResults) ? downResults : []).map((result) => [result.node_id, result]))
+        const upMap = new Map((Array.isArray(upResults) ? upResults : []).map((result) => [result.node_id, result]))
+        const hasDownPhase = downMap.size > 0
+        const hasUpPhase = upMap.size > 0
+
+        return nodeIds.map((nodeId) => {
+            const down = downMap.get(nodeId) || null
+            const up = upMap.get(nodeId) || null
+            const downStarted = down !== null
+            const upStarted = up !== null
+            const downOK = downStarted ? Boolean(down.ok) : null
+            const upOK = upStarted ? Boolean(up.ok) : null
+            const ok = (hasDownPhase ? downOK === true : true) && (hasUpPhase ? upOK === true : true)
+            const errors = [
+                down && down.error ? `down: ${down.error}` : '',
+                up && up.error ? `up: ${up.error}` : '',
+            ].filter(Boolean)
+
+            return {
+                node_id: nodeId,
+                ok,
+                down_ok: downOK,
+                up_ok: upOK,
+                output: (up && up.output) || (down && down.output) || '',
+                error: errors.join('\n'),
+            }
+        })
+    }
+
+    const fetchClusterLogsSnapshot = async (cluster, options = {}) => {
+        const { silent = false } = options
+        if (!cluster || !cluster.stack_name || !Array.isArray(cluster.nodes) || cluster.nodes.length === 0) {
+            setClusterLogs([])
+            return
+        }
+
+        if (!silent) {
+            setClusterLogsLoading(true)
+        }
+        setClusterLogsError('')
+
+        try {
+            const snapshots = await Promise.all(cluster.nodes.map(async (nodeId) => {
+                const containersRes = await fetch(`/api/nodes/${nodeId}/containers`, {
+                    headers: { 'Authorization': `Bearer ${token}` },
+                })
+                if (containersRes.status === 401) {
+                    handleLogout()
+                    throw new Error('Session expired')
+                }
+                if (!containersRes.ok) {
+                    const text = await containersRes.text()
+                    throw new Error(text || `Failed to load containers on ${nodeId}`)
+                }
+
+                const containersData = await containersRes.json()
+                const containersList = Array.isArray(containersData) ? containersData : []
+                const composeContainers = containersList.filter((container) => {
+                    const labels = container?.Labels || {}
+                    return String(labels['com.docker.compose.project'] || '').trim() === cluster.stack_name
+                })
+
+                const currentNode = nodes.find((node) => node.node_id === nodeId)
+                const nodeName = getNodeDisplayName(currentNode || { node_id: nodeId })
+
+                const logItems = await Promise.all(composeContainers.map(async (container) => {
+                    const logsRes = await fetch(`/api/nodes/${nodeId}/containers/${container.Id}/logs`, {
+                        headers: { 'Authorization': `Bearer ${token}` },
+                    })
+                    let text = ''
+                    if (logsRes.ok) {
+                        text = await logsRes.text()
+                    } else {
+                        const errText = await logsRes.text()
+                        text = errText || 'Failed to load logs'
+                    }
+
+                    return {
+                        key: `${nodeId}:${container.Id}`,
+                        node_id: nodeId,
+                        node_name: nodeName,
+                        container_id: container.Id,
+                        container_name: getContainerPrimaryName(container) || container.Id.substring(0, 12),
+                        text,
+                    }
+                }))
+
+                return logItems
+            }))
+
+            const nextLogs = snapshots
+                .flat()
+                .sort((a, b) => `${a.node_name}:${a.container_name}`.localeCompare(`${b.node_name}:${b.container_name}`))
+
+            setClusterLogs(nextLogs)
+        } catch (e) {
+            console.error('cluster logs error', e)
+            setClusterLogsError(e.message || 'Failed to load cluster logs')
+        } finally {
+            if (!silent) {
+                setClusterLogsLoading(false)
+            }
+        }
+    }
+
+    const openClusterLogs = async (cluster) => {
+        const target = {
+            id: cluster.id,
+            name: cluster.name || cluster.stack_name,
+            stack_name: cluster.stack_name,
+            nodes: Array.isArray(cluster.nodes) ? cluster.nodes : [],
+        }
+        setClusterLogsTarget(target)
+        setClusterLogsFollow(true)
+        await fetchClusterLogsSnapshot(target)
+    }
+
+    const refreshCluster = async (cluster) => {
+        const clusterLabel = cluster.name || cluster.stack_name
+        const clusterNodes = Array.isArray(cluster.nodes) ? cluster.nodes.filter(Boolean) : []
+
+        if (!cluster.stack_name || !String(cluster.content || '').trim()) {
+            setClusterError('У кластера нет сохранённого compose-файла для обновления')
+            return
+        }
+        if (clusterNodes.length === 0) {
+            setClusterError('У кластера нет сохранённых нод для обновления')
+            return
+        }
+        if (!window.confirm(`Обновить кластер "${clusterLabel}" на ${clusterNodes.length} нодах?\n\nБудет выполнено: compose down -> compose up -d, после чего панель начнёт подтягивать логи контейнеров.`)) {
+            return
+        }
+
+        setClusterLoading(true)
+        setClusterError('')
+        setClusterResults([])
+        setClusterLogs([])
+        setClusterLogsError('')
+        setClusterLogsTarget(null)
+        setClusterLogsFollow(false)
+
+        try {
+            const downRes = await fetch(`/api/clusters/${cluster.id}`, {
+                method: 'DELETE',
+                headers: { 'Authorization': `Bearer ${token}` },
+            })
+            if (downRes.status === 401) {
+                handleLogout()
+                return
+            }
+            if (!downRes.ok) {
+                const text = await downRes.text()
+                throw new Error(text || 'Failed to stop cluster before update')
+            }
+
+            const downData = await downRes.json()
+            const downResults = downData.results || []
+
+            if (!downData.deleted) {
+                setClusterResults(mergeClusterResults(clusterNodes, downResults, []))
+                throw new Error('Обновление остановлено: не удалось выполнить compose down на всех нодах')
+            }
+
+            const upRes = await fetch('/api/clusters/deploy', {
+                method: 'POST',
+                headers: {
+                    'Authorization': `Bearer ${token}`,
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    id: cluster.id,
+                    name: cluster.stack_name,
+                    content: cluster.content,
+                    nodes: clusterNodes,
+                }),
+            })
+            if (upRes.status === 401) {
+                handleLogout()
+                return
+            }
+            if (!upRes.ok) {
+                const text = await upRes.text()
+                throw new Error(text || 'Failed to start cluster after update')
+            }
+
+            const upData = await upRes.json()
+            setClusterResults(mergeClusterResults(clusterNodes, downResults, upData.results || []))
+
+            const target = {
+                id: cluster.id,
+                name: clusterLabel,
+                stack_name: cluster.stack_name,
+                nodes: clusterNodes,
+            }
+
+            setClusterLogsTarget(target)
+            setClusterLogsFollow(true)
+
+            fetchNodes()
+            fetchClusters()
+            if (selectedNode && clusterNodes.includes(selectedNode.node_id)) {
+                fetchContainers(selectedNode.node_id)
+            }
+
+            await fetchClusterLogsSnapshot(target)
+        } catch (e) {
+            console.error('cluster refresh error', e)
+            setClusterError(e.message)
+        } finally {
+            setClusterLoading(false)
+        }
+    }
+
     const deleteCluster = async (cluster) => {
         if (!window.confirm(`Delete cluster "${cluster.name || cluster.stack_name}"? This will run stack_down on selected nodes.`)) {
             return
         }
         setClusterError('')
+        if (clusterLogsTarget?.id === cluster.id) {
+            setClusterLogsFollow(false)
+            setClusterLogsTarget(null)
+            setClusterLogs([])
+            setClusterLogsError('')
+        }
         try {
             const res = await fetch(`/api/clusters/${cluster.id}`, {
                 method: 'DELETE',
@@ -640,6 +865,24 @@ function App() {
             setMobileView('nodes')
         }
     }, [selectedNode])
+
+    useEffect(() => {
+        if (!clusterOpen) {
+            setClusterLogsFollow(false)
+        }
+    }, [clusterOpen])
+
+    useEffect(() => {
+        if (!clusterLogsFollow || !clusterLogsTarget || !token) {
+            return
+        }
+
+        const interval = setInterval(() => {
+            fetchClusterLogsSnapshot(clusterLogsTarget, { silent: true })
+        }, 5000)
+
+        return () => clearInterval(interval)
+    }, [clusterLogsFollow, clusterLogsTarget, token, nodes])
 
     if (!token) {
         return <Login onLogin={handleLogin} />
@@ -1085,6 +1328,20 @@ function App() {
                                                                 Use
                                                             </button>
                                                             <button
+                                                                onClick={() => refreshCluster(c)}
+                                                                disabled={clusterLoading}
+                                                                className="px-2 py-1 bg-orange-600/20 text-orange-300 rounded text-xs hover:bg-orange-600/30 transition-colors border border-orange-600/30 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            >
+                                                                Update
+                                                            </button>
+                                                            <button
+                                                                onClick={() => openClusterLogs(c)}
+                                                                disabled={clusterLoading}
+                                                                className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                                                            >
+                                                                Logs
+                                                            </button>
+                                                            <button
                                                                 onClick={() => startRenameCluster(c)}
                                                                 className="px-2 py-1 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 transition-colors"
                                                             >
@@ -1213,7 +1470,30 @@ function App() {
                                                 <div key={r.node_id} className="flex items-start justify-between gap-3 p-3 rounded border border-zinc-800 bg-zinc-900/40">
                                                     <div className="min-w-0">
                                                         <div className="font-mono text-xs text-orange-400 truncate">{r.node_id}</div>
-                                                        {r.error && <div className="text-xs text-red-400 mt-1 whitespace-pre-wrap break-words">{r.error}</div>}
+                                                        {(r.down_ok != null || r.up_ok != null) && (
+                                                            <div className="mt-2 flex flex-wrap gap-2">
+                                                                {r.down_ok !== null && (
+                                                                    <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${
+                                                                        r.down_ok
+                                                                            ? 'bg-green-900/30 text-green-400 border border-green-900'
+                                                                            : 'bg-red-900/30 text-red-400 border border-red-900'
+                                                                    }`}>
+                                                                        down {r.down_ok ? 'ok' : 'fail'}
+                                                                    </span>
+                                                                )}
+                                                                {r.up_ok !== null && (
+                                                                    <span className={`px-2 py-1 text-[10px] font-bold uppercase rounded ${
+                                                                        r.up_ok
+                                                                            ? 'bg-green-900/30 text-green-400 border border-green-900'
+                                                                            : 'bg-red-900/30 text-red-400 border border-red-900'
+                                                                    }`}>
+                                                                        up {r.up_ok ? 'ok' : 'fail'}
+                                                                    </span>
+                                                                )}
+                                                            </div>
+                                                        )}
+                                                        {r.error && <div className="text-xs text-red-400 mt-2 whitespace-pre-wrap break-words">{r.error}</div>}
+                                                        {r.output && <div className="text-xs text-zinc-500 mt-2 whitespace-pre-wrap break-words">{r.output}</div>}
                                                     </div>
                                                     <div className={`text-xs font-bold px-2 py-1 rounded ${
                                                         r.ok ? 'bg-green-900/30 text-green-400 border border-green-900' : 'bg-red-900/30 text-red-400 border border-red-900'
@@ -1225,6 +1505,66 @@ function App() {
                                         </div>
                                     </div>
                                 )}
+
+                                <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4">
+                                    <div className="flex items-center justify-between gap-3">
+                                        <div>
+                                            <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Cluster Logs</div>
+                                            <div className="text-xs text-zinc-500 mt-1">
+                                                {clusterLogsTarget
+                                                    ? `${clusterLogsTarget.name || clusterLogsTarget.stack_name} · ${clusterLogsFollow ? 'follow on' : 'follow off'}`
+                                                    : 'Выберите Logs или Update у кластера'}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => {
+                                                    if (clusterLogsTarget) {
+                                                        fetchClusterLogsSnapshot(clusterLogsTarget)
+                                                    }
+                                                }}
+                                                disabled={!clusterLogsTarget || clusterLogsLoading}
+                                                className="px-3 py-2 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                Refresh
+                                            </button>
+                                            <button
+                                                onClick={() => setClusterLogsFollow((prev) => !prev)}
+                                                disabled={!clusterLogsTarget}
+                                                className="px-3 py-2 bg-zinc-800 text-zinc-300 rounded text-xs hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                            >
+                                                {clusterLogsFollow ? 'Stop Follow' : 'Start Follow'}
+                                            </button>
+                                        </div>
+                                    </div>
+                                    {clusterLogsLoading && <div className="mt-3 text-sm text-zinc-500">Loading logs...</div>}
+                                    {clusterLogsError && (
+                                        <div className="mt-3 text-red-400 text-sm bg-red-900/20 p-3 rounded border border-red-900/50">
+                                            {clusterLogsError}
+                                        </div>
+                                    )}
+                                    {!clusterLogsLoading && !clusterLogsError && clusterLogs.length === 0 && (
+                                        <div className="mt-3 text-sm text-zinc-500">
+                                            {clusterLogsTarget ? 'Для выбранного compose-проекта контейнеры пока не найдены' : 'Логи кластера появятся здесь'}
+                                        </div>
+                                    )}
+                                    {clusterLogs.length > 0 && (
+                                        <div className="mt-3 space-y-3 max-h-72 overflow-auto pr-1">
+                                            {clusterLogs.map((entry) => (
+                                                <div key={entry.key} className="rounded border border-zinc-800 bg-zinc-900/40">
+                                                    <div className="flex items-center justify-between gap-3 border-b border-zinc-800 px-3 py-2">
+                                                        <div className="min-w-0">
+                                                            <div className="text-xs font-semibold text-zinc-200 truncate">{entry.container_name}</div>
+                                                            <div className="text-[11px] text-zinc-500 truncate">{entry.node_name}</div>
+                                                        </div>
+                                                        <div className="font-mono text-[10px] text-orange-400">{entry.container_id.substring(0, 12)}</div>
+                                                    </div>
+                                                    <pre className="max-h-52 overflow-auto whitespace-pre-wrap break-words px-3 py-2 text-[11px] text-zinc-300">{entry.text || 'no logs'}</pre>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
                             </div>
                         </div>
 
